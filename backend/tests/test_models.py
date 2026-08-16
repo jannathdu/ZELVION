@@ -7,7 +7,12 @@ def test_expected_tables_exist() -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
 
-    assert {"users", "roles", "user_roles"}.issubset(table_names)
+    assert {
+    "users",
+    "roles",
+    "user_roles",
+    "refresh_sessions",
+}.issubset(table_names)
 
 
 def test_user_roles_constraints() -> None:
@@ -24,3 +29,19 @@ def test_user_roles_constraints() -> None:
         key["options"].get("ondelete") == "CASCADE"
         for key in foreign_keys
     )
+
+def test_refresh_session_constraints() -> None:
+    inspector = inspect(engine)
+
+    foreign_keys = inspector.get_foreign_keys("refresh_sessions")
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0]["referred_table"] == "users"
+    assert foreign_keys[0]["options"].get("ondelete") == "CASCADE"
+
+    indexes = inspector.get_indexes("refresh_sessions")
+    token_index = next(
+        index
+        for index in indexes
+        if index["name"] == "ix_refresh_sessions_token_jti"
+    )
+    assert token_index["unique"] is True

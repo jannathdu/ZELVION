@@ -1,12 +1,20 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Response,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.app.api.dependencies import CurrentUser
 from backend.app.core.config import get_settings
 from backend.app.core.security import (
     create_access_token,
@@ -16,6 +24,7 @@ from backend.app.core.security import (
     verify_password,
 )
 from backend.app.db.session import get_db
+from backend.app.models.refresh_session import RefreshSession
 from backend.app.models.user import User
 from backend.app.schemas.auth import (
     LoginRequest,
@@ -36,12 +45,36 @@ DUMMY_PASSWORD_HASH = hash_password(
 )
 
 
-def create_token_response(user_id: uuid.UUID) -> TokenResponse:
+def invalid_refresh_token_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired refresh token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def create_token_response(
+    user_id: uuid.UUID,
+    database: Session,
+) -> TokenResponse:
     subject = str(user_id)
+    access_token = create_access_token(subject)
+    refresh_token = create_refresh_token(subject)
+    refresh_payload = decode_token(refresh_token)
+
+    refresh_session = RefreshSession(
+        user_id=user_id,
+        token_jti=uuid.UUID(refresh_payload["jti"]),
+        expires_at=datetime.fromtimestamp(
+            refresh_payload["exp"],
+            tz=timezone.utc,
+        ),
+    )
+    database.add(refresh_session)
 
     return TokenResponse(
-        access_token=create_access_token(subject),
-        refresh_token=create_refresh_token(subject),
+        access_token=access_token,
+        refresh_token=refresh_token,
         expires_in=settings.access_token_expire_minutes * 60,
     )
 
@@ -70,7 +103,6 @@ def register_user(
         email=email,
         password_hash=hash_password(payload.password),
     )
-
     database.add(user)
 
     try:
@@ -120,7 +152,10 @@ def login_user(
             detail="Account is inactive",
         )
 
-    return create_token_response(user.id)
+    token_response = create_token_response(user.id, database)
+    database.commit()
+
+    return token_response
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -135,20 +170,73 @@ def refresh_tokens(
             raise jwt.InvalidTokenError
 
         user_id = uuid.UUID(token_payload["sub"])
+        token_jti = uuid.UUID(token_payload["jti"])
     except (jwt.InvalidTokenError, ValueError, KeyError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from None
+        raise invalid_refresh_token_error() from None
+
+    refresh_session = database.scalar(
+        select(RefreshSession).where(
+            RefreshSession.token_jti == token_jti,
+            RefreshSession.user_id == user_id,
+        )
+    )
+
+    now = datetime.now(timezone.utc)
+
+    if (
+        refresh_session is None
+        or refresh_session.revoked_at is not None
+        or refresh_session.expires_at <= now
+    ):
+        raise invalid_refresh_token_error()
 
     user = database.get(User, user_id)
-
     if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or inactive account",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise invalid_refresh_token_error()
 
-    return create_token_response(user.id)
+    refresh_session.revoked_at = now
+    token_response = create_token_response(user.id, database)
+    database.commit()
+
+    return token_response
+
+
+@router.get("/me", response_model=UserResponse)
+def read_current_user(
+    current_user: CurrentUser,
+) -> User:
+    return current_user
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def logout_user(
+    payload: RefreshTokenRequest,
+    database: DatabaseSession,
+) -> Response:
+    try:
+        token_payload = decode_token(payload.refresh_token)
+
+        if token_payload["type"] != "refresh":
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        token_jti = uuid.UUID(token_payload["jti"])
+    except (jwt.InvalidTokenError, ValueError, KeyError):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    refresh_session = database.scalar(
+        select(RefreshSession).where(
+            RefreshSession.token_jti == token_jti
+        )
+    )
+
+    if (
+        refresh_session is not None
+        and refresh_session.revoked_at is None
+    ):
+        refresh_session.revoked_at = datetime.now(timezone.utc)
+        database.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

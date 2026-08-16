@@ -65,6 +65,33 @@ def test_registration_login_and_refresh_flow() -> None:
         assert login_data["refresh_token"]
         assert login_data["expires_in"] == 900
 
+        missing_token_response = client.get(
+            "/api/v1/auth/me"
+        )
+        assert missing_token_response.status_code == 401
+
+        current_user_response = client.get(
+            "/api/v1/auth/me",
+            headers={
+                "Authorization": (
+                    f"Bearer {login_data['access_token']}"
+                )
+            },
+        )
+        assert current_user_response.status_code == 200
+        assert current_user_response.json()["email"] == email
+        assert "password_hash" not in current_user_response.json()
+
+        refresh_as_access_response = client.get(
+            "/api/v1/auth/me",
+            headers={
+                "Authorization": (
+                    f"Bearer {login_data['refresh_token']}"
+                )
+            },
+        )
+        assert refresh_as_access_response.status_code == 401
+        
         refresh_response = client.post(
             "/api/v1/auth/refresh",
             json={
@@ -78,6 +105,38 @@ def test_registration_login_and_refresh_flow() -> None:
         assert refresh_data["refresh_token"]
         assert refresh_data["access_token"] != login_data["access_token"]
 
+        reused_token_response = client.post(
+            "/api/v1/auth/refresh",
+            json={
+                "refresh_token": login_data["refresh_token"],
+            },
+        )
+        assert reused_token_response.status_code == 401
+
+        logout_response = client.post(
+            "/api/v1/auth/logout",
+            json={
+                "refresh_token": refresh_data["refresh_token"],
+            },
+        )
+        assert logout_response.status_code == 204
+
+        logged_out_refresh_response = client.post(
+            "/api/v1/auth/refresh",
+            json={
+                "refresh_token": refresh_data["refresh_token"],
+            },
+        )
+        assert logged_out_refresh_response.status_code == 401
+
+        repeated_logout_response = client.post(
+            "/api/v1/auth/logout",
+            json={
+                "refresh_token": refresh_data["refresh_token"],
+            },
+        )
+        assert repeated_logout_response.status_code == 204
+        
     finally:
         with SessionLocal() as database:
             database.execute(
