@@ -1,5 +1,6 @@
+from collections.abc import Generator
 from sqlalchemy import URL, create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.core.config import get_settings
 
@@ -25,3 +26,7 @@ SessionLocal = sessionmaker(
     autoflush=False,
     expire_on_commit=False,
 )
+
+def get_db() -> Generator[Session, None, None]:
+    with SessionLocal() as database_session:
+        yield database_session
