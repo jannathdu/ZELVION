@@ -35,3 +35,7 @@ class UserSubscriptionResponse(BaseModel):
     cancelled_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class SubscriptionActivationRequest(BaseModel):
+    plan_id: uuid.UUID

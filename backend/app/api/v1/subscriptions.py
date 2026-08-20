@@ -1,19 +1,25 @@
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import CurrentUser
+from backend.app.core.config import get_settings
 from backend.app.db.session import get_db
 from backend.app.models.subscription_plan import SubscriptionPlan
 from backend.app.models.user_subscription import UserSubscription
 from backend.app.schemas.subscription import (
+    SubscriptionActivationRequest,
     SubscriptionPlanResponse,
     UserSubscriptionResponse,
 )
-
+from backend.app.services.subscription_service import (
+    ActiveSubscriptionExistsError,
+    SubscriptionPlanUnavailableError,
+    activate_subscription,
+)
 
 router = APIRouter(
     prefix="/subscriptions",
@@ -63,3 +69,38 @@ def get_my_subscription(
     )
 
     return database.scalars(statement).first()
+
+@router.post(
+    "/mock-activate",
+    response_model=UserSubscriptionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def mock_activate_subscription(
+    payload: SubscriptionActivationRequest,
+    current_user: CurrentUser,
+    database: DatabaseSession,
+) -> UserSubscription:
+    settings = get_settings()
+
+    if not settings.enable_mock_subscription_activation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )
+
+    try:
+        return activate_subscription(
+            database,
+            user_id=current_user.id,
+            plan_id=payload.plan_id,
+        )
+    except SubscriptionPlanUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Subscription plan unavailable",
+        ) from None
+    except ActiveSubscriptionExistsError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An active subscription already exists",
+        ) from None

@@ -285,3 +285,221 @@ def test_my_subscription_returns_active_subscription() -> None:
                 delete(User).where(User.email == email)
             )
             database.commit()
+
+def test_mock_activation_requires_authentication() -> None:
+    response = client.post(
+        "/api/v1/subscriptions/mock-activate",
+        json={
+            "plan_id": "00000000-0000-0000-0000-000000000001",
+        },
+    )
+
+    assert response.status_code == 401
+
+def test_mock_activation_creates_subscription() -> None:
+    import uuid
+
+    from sqlalchemy import delete, select
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.subscription_plan import SubscriptionPlan
+    from backend.app.models.user import User
+
+    email = f"mock-activation-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        with SessionLocal() as database:
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+            plan_id = plan.id
+
+        response = client.post(
+            "/api/v1/subscriptions/mock-activate",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+            json={
+                "plan_id": str(plan_id),
+            },
+        )
+
+        assert response.status_code == 201
+
+        data = response.json()
+
+        assert data["plan_id"] == str(plan_id)
+        assert data["status"] == "active"
+        assert data["price_minor_units"] == 1200
+        assert data["currency"] == "CNY"
+        assert data["duration_days"] == 30
+        assert data["max_devices"] == 3
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_mock_activation_rejects_second_active_subscription() -> None:
+    import uuid
+
+    from sqlalchemy import delete, select
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.subscription_plan import SubscriptionPlan
+    from backend.app.models.user import User
+
+    email = f"mock-duplicate-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        with SessionLocal() as database:
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+            plan_id = plan.id
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+        payload = {
+            "plan_id": str(plan_id),
+        }
+
+        first_response = client.post(
+            "/api/v1/subscriptions/mock-activate",
+            headers=headers,
+            json=payload,
+        )
+        assert first_response.status_code == 201
+
+        second_response = client.post(
+            "/api/v1/subscriptions/mock-activate",
+            headers=headers,
+            json=payload,
+        )
+
+        assert second_response.status_code == 409
+        assert second_response.json()["detail"] == (
+            "An active subscription already exists"
+        )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_mock_activation_is_hidden_when_disabled(
+    monkeypatch,
+) -> None:
+    import uuid
+    from types import SimpleNamespace
+
+    from sqlalchemy import delete
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.user import User
+
+    email = f"mock-disabled-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        monkeypatch.setattr(
+            "backend.app.api.v1.subscriptions.get_settings",
+            lambda: SimpleNamespace(
+                enable_mock_subscription_activation=False,
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/subscriptions/mock-activate",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+            json={
+                "plan_id": str(uuid.uuid4()),
+            },
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Not found"
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
