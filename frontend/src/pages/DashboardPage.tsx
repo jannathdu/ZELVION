@@ -1,13 +1,73 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import {
+  getSubscriptionPlans,
+  type SubscriptionPlan,
+} from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
+
+function formatPrice(plan: SubscriptionPlan): string {
+  const amount = plan.price_minor_units / 100;
+
+  return new Intl.NumberFormat("zh-CN", {
+    style: "currency",
+    currency: plan.currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function formatDataLimit(bytes: number | null): string {
+  if (bytes === null) {
+    return "Unlimited data";
+  }
+
+  const gibibytes = bytes / 1024 ** 3;
+  return `${gibibytes.toFixed(0)} GB data`;
+}
 
 export function DashboardPage() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [plansError, setPlansError] = useState("");
+  const [arePlansLoading, setArePlansLoading] =
+    useState(true);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadPlans(): Promise<void> {
+      try {
+        const availablePlans =
+          await getSubscriptionPlans();
+
+        if (isActive) {
+          setPlans(availablePlans);
+        }
+      } catch {
+        if (isActive) {
+          setPlansError(
+            "Plans are temporarily unavailable.",
+          );
+        }
+      } finally {
+        if (isActive) {
+          setArePlansLoading(false);
+        }
+      }
+    }
+
+    void loadPlans();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   async function handleSignOut(): Promise<void> {
     setIsSigningOut(true);
@@ -66,8 +126,8 @@ export function DashboardPage() {
             <span className="eyebrow">Account overview</span>
             <h1>Welcome to ZELVION</h1>
             <p>
-              Your secure workspace is ready. Service
-              features will appear here as they are enabled.
+              Manage your account, subscription, devices,
+              and protected connections.
             </p>
           </div>
 
@@ -89,22 +149,29 @@ export function DashboardPage() {
                 </p>
               </div>
             </div>
-            <button className="secondary-button" type="button" disabled>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled
+            >
               Connect unavailable
             </button>
           </article>
 
           <article className="status-card">
             <div className="card-label">Subscription</div>
-            <strong className="card-value">No active plan</strong>
+            <strong className="card-value">
+              No active plan
+            </strong>
             <p>
-              Subscription plans will be available in the
-              next development phase.
+              Choose a plan below to prepare your account.
             </p>
           </article>
 
           <article className="status-card" id="devices">
-            <div className="card-label">Registered devices</div>
+            <div className="card-label">
+              Registered devices
+            </div>
             <strong className="card-value">0 / 3</strong>
             <p>
               Device management has not been enabled yet.
@@ -118,6 +185,87 @@ export function DashboardPage() {
               Usage tracking begins after service activation.
             </p>
           </article>
+        </section>
+
+        <section
+          className="plans-section"
+          id="subscription"
+        >
+          <div className="section-heading plans-heading">
+            <div>
+              <span className="eyebrow">Plans</span>
+              <h2>Choose your access period</h2>
+              <p>
+                Simple CNY pricing with clear data and
+                device limits.
+              </p>
+            </div>
+          </div>
+
+          {arePlansLoading && (
+            <p className="plans-message">
+              Loading available plans...
+            </p>
+          )}
+
+          {plansError && (
+            <div className="error-message" role="alert">
+              {plansError}
+            </div>
+          )}
+
+          {!arePlansLoading && !plansError && (
+            <div className="plans-grid">
+              {plans.map((plan) => (
+                <article className="plan-card" key={plan.id}>
+                  <div>
+                    <span className="plan-code">
+                      {plan.duration_days === 1
+                        ? "Flexible access"
+                        : "Best monthly value"}
+                    </span>
+                    <h3>{plan.name}</h3>
+                    <div className="plan-price">
+                      {formatPrice(plan)}
+                    </div>
+                    <p className="plan-description">
+                      {plan.description}
+                    </p>
+                  </div>
+
+                  <ul className="plan-features">
+                    <li>
+                      {plan.duration_days}{" "}
+                      {plan.duration_days === 1
+                        ? "day"
+                        : "days"}{" "}
+                      of access
+                    </li>
+                    <li>
+                      {formatDataLimit(
+                        plan.data_limit_bytes,
+                      )}
+                    </li>
+                    <li>
+                      Up to {plan.max_devices}{" "}
+                      {plan.max_devices === 1
+                        ? "device"
+                        : "devices"}
+                    </li>
+                    <li>Secure account authentication</li>
+                  </ul>
+
+                  <button
+                    className="plan-button"
+                    type="button"
+                    disabled
+                  >
+                    Purchase coming next
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="account-section">
@@ -149,7 +297,9 @@ export function DashboardPage() {
             </div>
             <div>
               <span>User ID</span>
-              <strong className="user-id">{user?.id}</strong>
+              <strong className="user-id">
+                {user?.id}
+              </strong>
             </div>
           </div>
         </section>

@@ -113,3 +113,22 @@ export function getCurrentUser(
     },
   });
 }
+
+export type SubscriptionPlan = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  price_minor_units: number;
+  currency: string;
+  duration_days: number;
+  data_limit_bytes: number | null;
+  max_devices: number;
+};
+
+export function getSubscriptionPlans():
+Promise<SubscriptionPlan[]> {
+  return request<SubscriptionPlan[]>(
+    "/subscriptions/plans",
+  );
+}
