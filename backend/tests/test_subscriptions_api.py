@@ -40,3 +40,248 @@ def test_list_active_subscription_plans() -> None:
         for plan in plans
     ]
     assert prices == sorted(prices)
+
+def test_my_subscription_requires_authentication() -> None:
+    response = client.get("/api/v1/subscriptions/me")
+
+    assert response.status_code == 401
+
+def test_my_subscription_returns_none_when_inactive() -> None:
+    import uuid
+
+    from sqlalchemy import delete
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.user import User
+
+    email = f"subscription-test-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        response = client.get(
+            "/api/v1/subscriptions/me",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() is None
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_my_subscription_returns_active_subscription() -> None:
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete, select
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.subscription_plan import SubscriptionPlan
+    from backend.app.models.user import User
+    from backend.app.models.user_subscription import UserSubscription
+
+    email = f"active-subscription-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(User.email == email)
+            )
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            starts_at = datetime.now(timezone.utc)
+            ends_at = starts_at + timedelta(
+                days=plan.duration_days
+            )
+
+            subscription = UserSubscription(
+                user_id=user.id,
+                plan_id=plan.id,
+                status="active",
+                price_minor_units=plan.price_minor_units,
+                currency=plan.currency,
+                duration_days=plan.duration_days,
+                data_limit_bytes=plan.data_limit_bytes,
+                max_devices=plan.max_devices,
+                starts_at=starts_at,
+                ends_at=ends_at,
+            )
+
+            database.add(subscription)
+            database.commit()
+
+        response = client.get(
+            "/api/v1/subscriptions/me",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert data is not None
+        assert data["status"] == "active"
+        assert data["plan_id"] == str(plan.id)
+        assert data["price_minor_units"] == 1200
+        assert data["currency"] == "CNY"
+        assert data["duration_days"] == 30
+        assert data["max_devices"] == 3
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_my_subscription_returns_active_subscription() -> None:
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete, select
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.subscription_plan import SubscriptionPlan
+    from backend.app.models.user import User
+    from backend.app.models.user_subscription import UserSubscription
+
+    email = f"active-subscription-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(User.email == email)
+            )
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            plan_id = plan.id
+            starts_at = datetime.now(timezone.utc)
+            ends_at = starts_at + timedelta(
+                days=plan.duration_days
+            )
+
+            database.add(
+                UserSubscription(
+                    user_id=user.id,
+                    plan_id=plan.id,
+                    status="active",
+                    price_minor_units=plan.price_minor_units,
+                    currency=plan.currency,
+                    duration_days=plan.duration_days,
+                    data_limit_bytes=plan.data_limit_bytes,
+                    max_devices=plan.max_devices,
+                    starts_at=starts_at,
+                    ends_at=ends_at,
+                )
+            )
+            database.commit()
+
+        response = client.get(
+            "/api/v1/subscriptions/me",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert data is not None
+        assert data["status"] == "active"
+        assert data["plan_id"] == str(plan_id)
+        assert data["price_minor_units"] == 1200
+        assert data["currency"] == "CNY"
+        assert data["duration_days"] == 30
+        assert data["max_devices"] == 3
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()

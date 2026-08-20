@@ -13,6 +13,7 @@ def test_expected_tables_exist() -> None:
         "user_roles",
         "refresh_sessions",
         "subscription_plans",
+        "user_subscriptions",
     }.issubset(table_names)
 
 
@@ -86,4 +87,63 @@ def test_subscription_plan_constraints() -> None:
         "ck_subscription_plans_duration_positive",
         "ck_subscription_plans_devices_positive",
         "ck_subscription_plans_data_limit_positive",
+    }.issubset(constraint_names)
+
+def test_user_subscription_constraints() -> None:
+    inspector = inspect(engine)
+
+    foreign_keys = inspector.get_foreign_keys(
+        "user_subscriptions"
+    )
+    referenced_tables = {
+        key["referred_table"]
+        for key in foreign_keys
+    }
+
+    assert referenced_tables == {
+        "users",
+        "subscription_plans",
+    }
+
+    user_fk = next(
+        key
+        for key in foreign_keys
+        if key["referred_table"] == "users"
+    )
+    plan_fk = next(
+        key
+        for key in foreign_keys
+        if key["referred_table"] == "subscription_plans"
+    )
+
+    assert user_fk["options"].get("ondelete") == "CASCADE"
+    assert plan_fk["options"].get("ondelete") == "RESTRICT"
+
+    indexes = inspector.get_indexes("user_subscriptions")
+
+    active_index = next(
+        index
+        for index in indexes
+        if index["name"]
+        == "uq_user_subscriptions_one_active_per_user"
+    )
+
+    assert active_index["unique"] is True
+    assert active_index["column_names"] == ["user_id"]
+
+    check_constraints = inspector.get_check_constraints(
+        "user_subscriptions"
+    )
+    constraint_names = {
+        constraint["name"]
+        for constraint in check_constraints
+    }
+
+    assert {
+        "ck_user_subscriptions_status_valid",
+        "ck_user_subscriptions_period_valid",
+        "ck_user_subscriptions_price_nonnegative",
+        "ck_user_subscriptions_duration_positive",
+        "ck_user_subscriptions_devices_positive",
+        "ck_user_subscriptions_data_limit_positive",
     }.issubset(constraint_names)
