@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "ZELVION API"
     app_version: str = "0.1.0"
     environment: str = "development"
-
+    frontend_origin: str = "http://localhost:5173"
     db_host: str
     db_port: int = 5432
     db_name: str
