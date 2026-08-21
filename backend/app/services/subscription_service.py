@@ -141,3 +141,28 @@ def renew_subscription(
     database.refresh(subscription)
 
     return subscription
+
+def expire_due_subscriptions(
+    database: Session,
+    *,
+    expired_at: datetime | None = None,
+) -> int:
+    """Mark all elapsed active subscriptions as expired."""
+
+    now = expired_at or datetime.now(timezone.utc)
+
+    result = database.execute(
+        update(UserSubscription)
+        .where(
+            UserSubscription.status == "active",
+            UserSubscription.ends_at <= now,
+        )
+        .values(
+            status="expired",
+            updated_at=now,
+        )
+    )
+
+    database.commit()
+
+    return result.rowcount or 0

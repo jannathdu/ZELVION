@@ -385,3 +385,73 @@ def test_renew_subscription_marks_expired_subscription() -> None:
                 delete(User).where(User.email == email)
             )
             database.commit()
+
+def test_expire_due_subscriptions_marks_elapsed_active_rows() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app.models.user_subscription import UserSubscription
+    from backend.app.services.subscription_service import (
+        expire_due_subscriptions,
+    )
+
+    email = f"expire-due-{uuid.uuid4()}@example.com"
+
+    try:
+        with SessionLocal() as database:
+            user = User(
+                email=email,
+                password_hash="test-only-password-hash",
+            )
+            database.add(user)
+            database.commit()
+            database.refresh(user)
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+
+            now = datetime.now(timezone.utc)
+
+            subscription = UserSubscription(
+                user_id=user.id,
+                plan_id=plan.id,
+                status="active",
+                price_minor_units=plan.price_minor_units,
+                currency=plan.currency,
+                duration_days=plan.duration_days,
+                data_limit_bytes=plan.data_limit_bytes,
+                max_devices=plan.max_devices,
+                starts_at=now - timedelta(days=31),
+                ends_at=now - timedelta(days=1),
+            )
+
+            database.add(subscription)
+            database.commit()
+            database.refresh(subscription)
+
+            subscription_id = subscription.id
+
+            expired_count = expire_due_subscriptions(
+                database,
+                expired_at=now,
+            )
+
+            stored_subscription = database.get(
+                UserSubscription,
+                subscription_id,
+            )
+
+            assert expired_count >= 1
+            assert stored_subscription is not None
+            assert stored_subscription.status == "expired"
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
