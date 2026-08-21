@@ -5,6 +5,7 @@ from backend.app.models.user import User
 from backend.app.models.user_role import UserRole
 from backend.app.models.user_subscription import UserSubscription
 from backend.app.models.device import Device
+from backend.app.models.data_usage import DataUsage
 __all__ = [
     "RefreshSession",
     "Role",
@@ -13,4 +14,5 @@ __all__ = [
     "UserRole",
     "UserSubscription",
     "Device",
+    "DataUsage",
 ]
