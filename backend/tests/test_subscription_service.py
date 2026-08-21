@@ -217,3 +217,171 @@ def test_activate_subscription_rejects_unknown_plan() -> None:
                 delete(User).where(User.email == email)
             )
             database.commit()
+
+def test_renew_subscription_extends_active_subscription() -> None:
+    from datetime import timedelta
+
+    from backend.app.services.subscription_service import (
+        renew_subscription,
+    )
+
+    email = f"renew-subscription-{uuid.uuid4()}@example.com"
+
+    try:
+        with SessionLocal() as database:
+            user = User(
+                email=email,
+                password_hash="test-only-password-hash",
+            )
+            database.add(user)
+            database.commit()
+            database.refresh(user)
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+
+            subscription = activate_subscription(
+                database,
+                user_id=user.id,
+                plan_id=plan.id,
+            )
+
+            original_ends_at = subscription.ends_at
+
+            renewed_subscription = renew_subscription(
+                database,
+                user_id=user.id,
+            )
+
+            assert renewed_subscription.id == subscription.id
+            assert renewed_subscription.status == "active"
+            assert renewed_subscription.ends_at == (
+                original_ends_at + timedelta(days=30)
+            )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_renew_subscription_rejects_when_none_active() -> None:
+    from backend.app.services.subscription_service import (
+        NoActiveSubscriptionError,
+        renew_subscription,
+    )
+
+    email = f"renew-none-{uuid.uuid4()}@example.com"
+
+    try:
+        with SessionLocal() as database:
+            user = User(
+                email=email,
+                password_hash="test-only-password-hash",
+            )
+            database.add(user)
+            database.commit()
+            database.refresh(user)
+
+            try:
+                renew_subscription(
+                    database,
+                    user_id=user.id,
+                )
+            except NoActiveSubscriptionError:
+                pass
+            else:
+                raise AssertionError(
+                    "Renewal without an active subscription was not rejected"
+                )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_renew_subscription_marks_expired_subscription() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app.models.user_subscription import UserSubscription
+    from backend.app.services.subscription_service import (
+        NoActiveSubscriptionError,
+        renew_subscription,
+    )
+
+    email = f"renew-expired-{uuid.uuid4()}@example.com"
+
+    try:
+        with SessionLocal() as database:
+            user = User(
+                email=email,
+                password_hash="test-only-password-hash",
+            )
+            database.add(user)
+            database.commit()
+            database.refresh(user)
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+
+            now = datetime.now(timezone.utc)
+
+            subscription = UserSubscription(
+                user_id=user.id,
+                plan_id=plan.id,
+                status="active",
+                price_minor_units=plan.price_minor_units,
+                currency=plan.currency,
+                duration_days=plan.duration_days,
+                data_limit_bytes=plan.data_limit_bytes,
+                max_devices=plan.max_devices,
+                starts_at=now - timedelta(days=31),
+                ends_at=now - timedelta(days=1),
+            )
+
+            database.add(subscription)
+            database.commit()
+            database.refresh(subscription)
+
+            subscription_id = subscription.id
+
+            try:
+                renew_subscription(
+                    database,
+                    user_id=user.id,
+                    renewed_at=now,
+                )
+            except NoActiveSubscriptionError:
+                pass
+            else:
+                raise AssertionError(
+                    "Expired subscription was incorrectly renewed"
+                )
+
+            stored_subscription = database.get(
+                UserSubscription,
+                subscription_id,
+            )
+
+            assert stored_subscription is not None
+            assert stored_subscription.status == "expired"
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()

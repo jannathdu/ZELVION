@@ -19,7 +19,8 @@ class SubscriptionPlanUnavailableError(SubscriptionServiceError):
 
 class ActiveSubscriptionExistsError(SubscriptionServiceError):
     """Raised when a user already has a valid active subscription."""
-
+class NoActiveSubscriptionError(SubscriptionServiceError):
+    """Raised when a user has no valid active subscription to renew."""
 
 def activate_subscription(
     database: Session,
@@ -90,6 +91,53 @@ def activate_subscription(
         database.rollback()
         raise ActiveSubscriptionExistsError from None
 
+    database.refresh(subscription)
+
+    return subscription
+
+def renew_subscription(
+    database: Session,
+    *,
+    user_id: uuid.UUID,
+    renewed_at: datetime | None = None,
+) -> UserSubscription:
+    """Extend a user's valid active subscription."""
+
+    now = renewed_at or datetime.now(timezone.utc)
+
+    database.execute(
+        update(UserSubscription)
+        .where(
+            UserSubscription.user_id == user_id,
+            UserSubscription.status == "active",
+            UserSubscription.ends_at <= now,
+        )
+        .values(
+            status="expired",
+            updated_at=now,
+        )
+    )
+
+    subscription = database.scalar(
+        select(UserSubscription)
+        .where(
+            UserSubscription.user_id == user_id,
+            UserSubscription.status == "active",
+            UserSubscription.ends_at > now,
+        )
+        .with_for_update()
+    )
+    if subscription is None:
+        database.commit()
+        raise NoActiveSubscriptionError
+
+    subscription.ends_at = (
+        subscription.ends_at
+        + timedelta(days=subscription.duration_days)
+    )
+    subscription.updated_at = now
+
+    database.commit()
     database.refresh(subscription)
 
     return subscription

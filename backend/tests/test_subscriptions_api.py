@@ -503,3 +503,202 @@ def test_mock_activation_is_hidden_when_disabled(
                 delete(User).where(User.email == email)
             )
             database.commit()
+
+def test_mock_renewal_requires_authentication() -> None:
+    response = client.post(
+        "/api/v1/subscriptions/mock-renew"
+    )
+
+    assert response.status_code == 401
+
+def test_mock_renewal_extends_active_subscription() -> None:
+    import uuid
+    from datetime import datetime
+
+    from sqlalchemy import delete, select
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.subscription_plan import SubscriptionPlan
+    from backend.app.models.user import User
+
+    email = f"mock-renew-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+
+        with SessionLocal() as database:
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+            plan_id = plan.id
+
+        activation_response = client.post(
+            "/api/v1/subscriptions/mock-activate",
+            headers=headers,
+            json={
+                "plan_id": str(plan_id),
+            },
+        )
+
+        assert activation_response.status_code == 201
+
+        original_ends_at = datetime.fromisoformat(
+            activation_response.json()["ends_at"]
+        )
+
+        renewal_response = client.post(
+            "/api/v1/subscriptions/mock-renew",
+            headers=headers,
+        )
+
+        assert renewal_response.status_code == 200
+
+        renewed_ends_at = datetime.fromisoformat(
+            renewal_response.json()["ends_at"]
+        )
+
+        assert renewed_ends_at > original_ends_at
+        assert renewal_response.json()["status"] == "active"
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_mock_renewal_rejects_when_none_active() -> None:
+    import uuid
+
+    from sqlalchemy import delete
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.user import User
+
+    email = f"mock-renew-none-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        response = client.post(
+            "/api/v1/subscriptions/mock-renew",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            "No active subscription to renew"
+        )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_mock_renewal_is_hidden_when_disabled(
+    monkeypatch,
+) -> None:
+    import uuid
+    from types import SimpleNamespace
+
+    from sqlalchemy import delete
+
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.user import User
+
+    email = f"mock-renew-disabled-{uuid.uuid4()}@example.com"
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+        assert login_response.status_code == 200
+
+        access_token = login_response.json()["access_token"]
+
+        monkeypatch.setattr(
+            "backend.app.api.v1.subscriptions.get_settings",
+            lambda: SimpleNamespace(
+                enable_mock_subscription_activation=False,
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/subscriptions/mock-renew",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Not found"
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(User.email == email)
+            )
+            database.commit()

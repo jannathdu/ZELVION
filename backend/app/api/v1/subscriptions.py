@@ -17,8 +17,10 @@ from backend.app.schemas.subscription import (
 )
 from backend.app.services.subscription_service import (
     ActiveSubscriptionExistsError,
+    NoActiveSubscriptionError,
     SubscriptionPlanUnavailableError,
     activate_subscription,
+    renew_subscription,
 )
 
 router = APIRouter(
@@ -103,4 +105,31 @@ def mock_activate_subscription(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An active subscription already exists",
+        ) from None
+
+@router.post(
+    "/mock-renew",
+    response_model=UserSubscriptionResponse,
+)
+def mock_renew_subscription(
+    current_user: CurrentUser,
+    database: DatabaseSession,
+) -> UserSubscription:
+    settings = get_settings()
+
+    if not settings.enable_mock_subscription_activation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )
+
+    try:
+        return renew_subscription(
+            database,
+            user_id=current_user.id,
+        )
+    except NoActiveSubscriptionError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No active subscription to renew",
         ) from None
