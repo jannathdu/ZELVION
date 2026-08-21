@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.data_usage import router as data_usage_router
 from backend.app.api.v1.devices import router as devices_router
+from backend.app.api.v1.dashboard import router as dashboard_router
 from backend.app.api.v1.health import router as health_router
 from backend.app.api.v1.payments import router as payments_router
 from backend.app.api.v1.subscriptions import (
@@ -18,3 +19,4 @@ api_router.include_router(subscriptions_router)
 api_router.include_router(devices_router)
 api_router.include_router(data_usage_router)
 api_router.include_router(payments_router)
+api_router.include_router(dashboard_router)
