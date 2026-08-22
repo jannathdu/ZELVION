@@ -32,6 +32,13 @@ class Settings(BaseSettings):
 
     enable_mock_subscription_activation: bool = False
 
+    enable_alipay_payments: bool = False
+    alipay_app_id: str | None = None
+    alipay_app_private_key: SecretStr | None = None
+    alipay_public_key: str | None = None
+    alipay_gateway_url: str | None = None
+    alipay_notify_url: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -40,6 +47,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_environment_security(self) -> Self:
+        if self.enable_alipay_payments:
+            self._validate_alipay_config()
+
         if self.environment != "production":
             return self
 
@@ -84,6 +94,62 @@ class Settings(BaseSettings):
             )
 
         return self
+
+    def _validate_alipay_config(self) -> None:
+        required_values = {
+            "ALIPAY_APP_ID": self.alipay_app_id,
+            "ALIPAY_APP_PRIVATE_KEY": (
+                self.alipay_app_private_key
+            ),
+            "ALIPAY_PUBLIC_KEY": self.alipay_public_key,
+            "ALIPAY_GATEWAY_URL": self.alipay_gateway_url,
+            "ALIPAY_NOTIFY_URL": self.alipay_notify_url,
+        }
+
+        missing = [
+            name
+            for name, value in required_values.items()
+            if value is None
+            or (
+                isinstance(value, str)
+                and not value.strip()
+            )
+        ]
+
+        if missing:
+            raise ValueError(
+                "Alipay payments are enabled but required "
+                "configuration is missing: "
+                + ", ".join(missing)
+            )
+
+        gateway = urlparse(
+            self.alipay_gateway_url or "",
+        )
+
+        if gateway.scheme != "https":
+            raise ValueError(
+                "Alipay gateway URL must use HTTPS."
+            )
+
+        notify = urlparse(
+            self.alipay_notify_url or "",
+        )
+
+        if notify.scheme != "https":
+            raise ValueError(
+                "Alipay notify URL must use HTTPS."
+            )
+
+        if self.environment == "production":
+            if (
+                gateway.hostname
+                != "openapi.alipay.com"
+            ):
+                raise ValueError(
+                    "Production Alipay gateway must use "
+                    "openapi.alipay.com."
+                )
 
 
 @lru_cache
