@@ -29,3 +29,8 @@ class PaymentResponse(BaseModel):
 
 class PaymentHistoryResponse(BaseModel):
     payments: list[PaymentResponse]
+
+
+class AlipayOrderResponse(BaseModel):
+    payment_id: uuid.UUID
+    payment_url: str

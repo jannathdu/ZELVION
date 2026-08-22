@@ -13,10 +13,14 @@ from backend.app.api.dependencies import CurrentUser
 from backend.app.core.config import get_settings
 from backend.app.db.session import get_db
 from backend.app.schemas.payment import (
+    AlipayOrderResponse,
     PaymentCreateRequest,
     PaymentHistoryResponse,
     PaymentResponse,
     PaymentSuccessRequest,
+)
+from backend.app.services.alipay_payment_service import (
+    create_alipay_payment_url,
 )
 from backend.app.services.payment_service import (
     ActiveSubscriptionPaymentError,
@@ -39,6 +43,7 @@ router = APIRouter(
     prefix="/payments",
     tags=["payments"],
 )
+
 
 DatabaseSession = Annotated[
     Session,
@@ -82,6 +87,49 @@ def create_payment(
 
 
 @router.post(
+    "/{payment_id}/alipay-order",
+    response_model=AlipayOrderResponse,
+)
+def create_alipay_order(
+    payment_id: uuid.UUID,
+    current_user: CurrentUser,
+    database: DatabaseSession,
+) -> AlipayOrderResponse:
+
+    try:
+        payment = get_payment_for_update(
+            database,
+            user_id=current_user.id,
+            payment_id=payment_id,
+        )
+
+        if payment.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Payment is not pending",
+            )
+
+        payment_url = create_alipay_payment_url(
+            payment,
+        )
+
+        database.commit()
+
+        return AlipayOrderResponse(
+            payment_id=payment.id,
+            payment_url=payment_url,
+        )
+
+    except PaymentNotFoundError:
+        database.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment not found",
+        ) from None
+
+
+@router.post(
     "/{payment_id}/success",
     response_model=PaymentResponse,
 )
@@ -91,6 +139,7 @@ def payment_success(
     current_user: CurrentUser,
     database: DatabaseSession,
 ) -> PaymentResponse:
+
     settings = get_settings()
 
     if not settings.enable_mock_subscription_activation:
@@ -100,19 +149,14 @@ def payment_success(
         )
 
     try:
-        # Lock and inspect the payment before making
-        # any state transition.
         existing_payment = get_payment_for_update(
             database,
             user_id=current_user.id,
             payment_id=payment_id,
         )
 
-        # Idempotent callback replay:
-        # the same successful provider transaction
-        # returns the existing payment and must NOT
-        # activate the subscription again.
         if existing_payment.status == "success":
+
             if (
                 existing_payment.provider_transaction_id
                 == payload.provider_transaction_id
@@ -122,14 +166,11 @@ def payment_success(
 
                 return existing_payment
 
-            # A completed payment may not be overwritten
-            # with another provider transaction.
             raise InvalidPaymentStatusError
 
         if existing_payment.status != "pending":
             raise InvalidPaymentStatusError
 
-        # Do not commit payment success yet.
         payment = mark_payment_success(
             database,
             user_id=current_user.id,
@@ -140,7 +181,6 @@ def payment_success(
             commit=False,
         )
 
-        # Do not commit subscription separately either.
         activate_subscription(
             database,
             user_id=current_user.id,
@@ -148,8 +188,6 @@ def payment_success(
             commit=False,
         )
 
-        # Payment success + subscription activation
-        # are committed together.
         database.commit()
         database.refresh(payment)
 
@@ -198,6 +236,7 @@ def payment_history(
     current_user: CurrentUser,
     database: DatabaseSession,
 ) -> PaymentHistoryResponse:
+
     payments = get_payment_history(
         database,
         user_id=current_user.id,
