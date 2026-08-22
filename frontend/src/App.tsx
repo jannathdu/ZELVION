@@ -9,6 +9,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { DevicesPage } from "./pages/DevicesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { UsagePage } from "./pages/UsagePage";
 
 
 function App() {
@@ -46,6 +47,11 @@ function App() {
         <Route
           path="/devices"
           element={<DevicesPage />}
+        />
+
+        <Route
+          path="/usage"
+          element={<UsagePage />}
         />
 
       </Route>

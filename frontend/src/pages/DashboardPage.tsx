@@ -300,9 +300,12 @@ export function DashboardPage() {
               Subscription
             </a>
 
-            <a className="nav-item">
-              Usage
-            </a>
+            <Link
+  className="nav-item"
+  to="/usage"
+>
+  Usage
+</Link>
 
           </nav>
 

@@ -3,13 +3,19 @@ import { requestWithAuth } from "./client";
 
 export type PaymentOrder = {
   id: string;
-  user_id: string;
   subscription_plan_id: string;
-  provider: string;
-  status: string;
-  amount_minor_units: number;
+  amount: number;
   currency: string;
+  provider: string;
+  provider_transaction_id: string | null;
+  status: string;
   created_at: string;
+  paid_at: string | null;
+};
+
+
+export type PaymentHistoryResponse = {
+  payments: PaymentOrder[];
 };
 
 
@@ -30,6 +36,7 @@ export function createPaymentOrder(
   );
 }
 
+
 export function completePayment(
   accessToken: string,
   paymentId: string,
@@ -44,5 +51,15 @@ export function completePayment(
           `demo-${Date.now()}`,
       }),
     },
+  );
+}
+
+
+export function getPaymentHistory(
+  accessToken: string,
+): Promise<PaymentHistoryResponse> {
+  return requestWithAuth<PaymentHistoryResponse>(
+    "/payments/history",
+    accessToken,
   );
 }
