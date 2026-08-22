@@ -30,14 +30,21 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 30
 
-    enable_mock_subscription_activation: bool = False
-
+    # Alipay configuration
     enable_alipay_payments: bool = False
+
     alipay_app_id: str | None = None
+
     alipay_app_private_key: SecretStr | None = None
+
     alipay_public_key: str | None = None
+
     alipay_gateway_url: str | None = None
+
     alipay_notify_url: str | None = None
+
+    # Development/testing only
+    enable_mock_subscription_activation: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -47,6 +54,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_environment_security(self) -> Self:
+
         if self.enable_alipay_payments:
             self._validate_alipay_config()
 
@@ -96,6 +104,7 @@ class Settings(BaseSettings):
         return self
 
     def _validate_alipay_config(self) -> None:
+
         required_values = {
             "ALIPAY_APP_ID": self.alipay_app_id,
             "ALIPAY_APP_PRIVATE_KEY": (
@@ -142,10 +151,8 @@ class Settings(BaseSettings):
             )
 
         if self.environment == "production":
-            if (
-                gateway.hostname
-                != "openapi.alipay.com"
-            ):
+
+            if gateway.hostname != "openapi.alipay.com":
                 raise ValueError(
                     "Production Alipay gateway must use "
                     "openapi.alipay.com."
