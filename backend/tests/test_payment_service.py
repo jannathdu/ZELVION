@@ -6,10 +6,14 @@ from backend.app.db.session import SessionLocal
 from backend.app.models.subscription_plan import SubscriptionPlan
 from backend.app.models.user import User
 from backend.app.services.payment_service import (
+    InvalidPaymentStatusError,
+    PaymentNotFoundError,
+    PlanNotFoundError,
     create_payment_order,
-    mark_payment_success,
     get_payment_history,
+    mark_payment_success,
 )
+
 
 def test_create_payment_order_creates_pending_payment() -> None:
     email = f"payment-test-{uuid.uuid4()}@example.com"
@@ -54,11 +58,8 @@ def test_create_payment_order_creates_pending_payment() -> None:
             )
             database.commit()
 
-def test_create_payment_order_rejects_invalid_plan() -> None:
-    from backend.app.services.payment_service import (
-        PlanNotFoundError,
-    )
 
+def test_create_payment_order_rejects_invalid_plan() -> None:
     email = f"payment-invalid-{uuid.uuid4()}@example.com"
 
     try:
@@ -93,6 +94,7 @@ def test_create_payment_order_rejects_invalid_plan() -> None:
             )
             database.commit()
 
+
 def test_mark_payment_success_updates_payment() -> None:
     email = f"payment-success-{uuid.uuid4()}@example.com"
 
@@ -124,6 +126,7 @@ def test_mark_payment_success_updates_payment() -> None:
 
             updated_payment = mark_payment_success(
                 database,
+                user_id=user.id,
                 payment_id=payment.id,
                 provider_transaction_id="ALI-TEST-001",
             )
@@ -142,11 +145,8 @@ def test_mark_payment_success_updates_payment() -> None:
             )
             database.commit()
 
-def test_mark_payment_success_rejects_non_pending_payment() -> None:
-    from backend.app.services.payment_service import (
-        InvalidPaymentStatusError,
-    )
 
+def test_mark_payment_success_rejects_non_pending_payment() -> None:
     email = f"payment-status-{uuid.uuid4()}@example.com"
 
     try:
@@ -177,6 +177,7 @@ def test_mark_payment_success_rejects_non_pending_payment() -> None:
 
             mark_payment_success(
                 database,
+                user_id=user.id,
                 payment_id=payment.id,
                 provider_transaction_id="ALI-TEST-002",
             )
@@ -184,6 +185,7 @@ def test_mark_payment_success_rejects_non_pending_payment() -> None:
             try:
                 mark_payment_success(
                     database,
+                    user_id=user.id,
                     payment_id=payment.id,
                     provider_transaction_id="ALI-TEST-003",
                 )
@@ -200,6 +202,72 @@ def test_mark_payment_success_rejects_non_pending_payment() -> None:
                 delete(User).where(User.email == email)
             )
             database.commit()
+
+
+def test_mark_payment_success_rejects_other_users_payment() -> None:
+    owner_email = f"payment-owner-{uuid.uuid4()}@example.com"
+    attacker_email = f"payment-other-{uuid.uuid4()}@example.com"
+
+    try:
+        with SessionLocal() as database:
+            owner = User(
+                email=owner_email,
+                password_hash="test-only-password-hash",
+            )
+            other_user = User(
+                email=attacker_email,
+                password_hash="test-only-password-hash",
+            )
+
+            database.add_all([owner, other_user])
+            database.commit()
+            database.refresh(owner)
+            database.refresh(other_user)
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=owner.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            try:
+                mark_payment_success(
+                    database,
+                    user_id=other_user.id,
+                    payment_id=payment.id,
+                    provider_transaction_id="ALI-UNAUTHORIZED",
+                )
+            except PaymentNotFoundError:
+                pass
+            else:
+                raise AssertionError(
+                    "Another user's payment was accepted"
+                )
+
+            database.refresh(payment)
+            assert payment.status == "pending"
+            assert payment.provider_transaction_id is None
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email.in_(
+                        [owner_email, attacker_email]
+                    )
+                )
+            )
+            database.commit()
+
 
 def test_get_payment_history_returns_user_payments() -> None:
     email = f"payment-history-{uuid.uuid4()}@example.com"

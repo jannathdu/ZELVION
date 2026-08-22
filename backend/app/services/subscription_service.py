@@ -19,8 +19,11 @@ class SubscriptionPlanUnavailableError(SubscriptionServiceError):
 
 class ActiveSubscriptionExistsError(SubscriptionServiceError):
     """Raised when a user already has a valid active subscription."""
+
+
 class NoActiveSubscriptionError(SubscriptionServiceError):
     """Raised when a user has no valid active subscription to renew."""
+
 
 def activate_subscription(
     database: Session,
@@ -28,8 +31,15 @@ def activate_subscription(
     user_id: uuid.UUID,
     plan_id: uuid.UUID,
     activated_at: datetime | None = None,
+    commit: bool = True,
 ) -> UserSubscription:
-    """Activate an available plan for a user."""
+    """
+    Activate an available plan for a user.
+
+    When commit=False, changes are flushed but the transaction
+    remains open so the caller can combine subscription activation
+    with other database changes atomically.
+    """
 
     now = activated_at or datetime.now(timezone.utc)
 
@@ -67,7 +77,9 @@ def activate_subscription(
     )
 
     if active_subscription is not None:
-        database.rollback()
+        if commit:
+            database.rollback()
+
         raise ActiveSubscriptionExistsError
 
     subscription = UserSubscription(
@@ -86,14 +98,20 @@ def activate_subscription(
     database.add(subscription)
 
     try:
-        database.commit()
+        # Flush catches database constraint errors while
+        # keeping transaction control with the caller.
+        database.flush()
+
+        if commit:
+            database.commit()
+            database.refresh(subscription)
+
     except IntegrityError:
         database.rollback()
         raise ActiveSubscriptionExistsError from None
 
-    database.refresh(subscription)
-
     return subscription
+
 
 def renew_subscription(
     database: Session,
@@ -127,6 +145,7 @@ def renew_subscription(
         )
         .with_for_update()
     )
+
     if subscription is None:
         database.commit()
         raise NoActiveSubscriptionError
@@ -141,6 +160,7 @@ def renew_subscription(
     database.refresh(subscription)
 
     return subscription
+
 
 def expire_due_subscriptions(
     database: Session,

@@ -51,6 +51,7 @@ async function request<T>(
 
     try {
       const errorBody = (await response.json()) as ApiErrorBody;
+
       if (typeof errorBody.detail === "string") {
         message = errorBody.detail;
       }
@@ -66,6 +67,21 @@ async function request<T>(
   }
 
   return (await response.json()) as T;
+}
+
+
+export function requestWithAuth<T>(
+  path: string,
+  accessToken: string,
+  options: RequestInit = {},
+): Promise<T> {
+  return request<T>(path, {
+    ...options,
+    headers: {
+      ...options.headers,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
 }
 
 export function register(

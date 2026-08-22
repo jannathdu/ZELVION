@@ -1,14 +1,21 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend.app.models.device import Device
-from backend.app.models.payment_transaction import PaymentTransaction
-from backend.app.models.subscription_plan import SubscriptionPlan
-from backend.app.models.user import User
-from backend.app.models.user_subscription import UserSubscription
 from backend.app.models.data_usage import DataUsage
+from backend.app.models.device import Device
+from backend.app.models.payment_transaction import (
+    PaymentTransaction,
+)
+from backend.app.models.subscription_plan import (
+    SubscriptionPlan,
+)
+from backend.app.models.user import User
+from backend.app.models.user_subscription import (
+    UserSubscription,
+)
 
 
 def get_dashboard_data(
@@ -16,6 +23,8 @@ def get_dashboard_data(
     *,
     user_id: uuid.UUID,
 ) -> dict:
+    now = datetime.now(timezone.utc)
+
     user = database.scalar(
         select(User).where(
             User.id == user_id,
@@ -27,9 +36,10 @@ def get_dashboard_data(
         .where(
             UserSubscription.user_id == user_id,
             UserSubscription.status == "active",
+            UserSubscription.ends_at > now,
         )
         .order_by(
-            UserSubscription.created_at.desc(),
+            UserSubscription.ends_at.desc(),
         )
     )
 
@@ -38,24 +48,37 @@ def get_dashboard_data(
     if subscription is not None:
         plan = database.scalar(
             select(SubscriptionPlan).where(
-                SubscriptionPlan.id == subscription.plan_id,
+                SubscriptionPlan.id
+                == subscription.plan_id,
             )
         )
 
-        if plan:
+        if plan is not None:
             plan_name = plan.name
 
-    used_bytes = database.scalar(
-        select(func.coalesce(func.sum(DataUsage.bytes_used), 0))
-        .where(
-            DataUsage.user_id == user_id,
+    used_bytes = 0
+
+    if subscription is not None:
+        used_bytes = (
+            database.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(DataUsage.bytes_used),
+                        0,
+                    )
+                ).where(
+                    DataUsage.user_id == user_id,
+                    DataUsage.subscription_id
+                    == subscription.id,
+                )
+            )
+            or 0
         )
-    )
 
     limit_bytes = None
     max_devices = None
 
-    if subscription:
+    if subscription is not None:
         limit_bytes = subscription.data_limit_bytes
         max_devices = subscription.max_devices
 
@@ -67,23 +90,42 @@ def get_dashboard_data(
             0,
         )
 
-    device_count = database.scalar(
-        select(func.count(Device.id))
-        .where(
-            Device.user_id == user_id,
-            Device.is_active.is_(True),
+    device_count = (
+        database.scalar(
+            select(func.count(Device.id)).where(
+                Device.user_id == user_id,
+                Device.is_active.is_(True),
+            )
         )
+        or 0
     )
 
-    last_payment = database.scalar(
-        select(PaymentTransaction)
-        .where(
-            PaymentTransaction.user_id == user_id,
+    last_payment = None
+
+    if subscription is not None:
+        last_payment = database.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.user_id == user_id,
+                PaymentTransaction.subscription_plan_id
+                == subscription.plan_id,
+                PaymentTransaction.status == "success",
+            )
+            .order_by(
+                PaymentTransaction.paid_at.desc(),
+                PaymentTransaction.created_at.desc(),
+            )
         )
-        .order_by(
-            PaymentTransaction.created_at.desc(),
+    else:
+        last_payment = database.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.user_id == user_id,
+            )
+            .order_by(
+                PaymentTransaction.created_at.desc(),
+            )
         )
-    )
 
     return {
         "user": {
@@ -94,17 +136,17 @@ def get_dashboard_data(
             "plan_name": plan_name,
             "status": (
                 subscription.status
-                if subscription
+                if subscription is not None
                 else None
             ),
             "starts_at": (
                 subscription.starts_at
-                if subscription
+                if subscription is not None
                 else None
             ),
             "ends_at": (
                 subscription.ends_at
-                if subscription
+                if subscription is not None
                 else None
             ),
         },
@@ -120,12 +162,12 @@ def get_dashboard_data(
         "payments": {
             "last_payment_status": (
                 last_payment.status
-                if last_payment
+                if last_payment is not None
                 else None
             ),
             "last_payment_date": (
                 last_payment.created_at
-                if last_payment
+                if last_payment is not None
                 else None
             ),
         },

@@ -1,5 +1,25 @@
-from backend.app.main import app
+import uuid
+
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, select
+
+from backend.app.db.session import SessionLocal
+from backend.app.main import app
+from backend.app.models.subscription_plan import SubscriptionPlan
+from backend.app.models.user import User
+from backend.app.services.data_usage_service import (
+    record_usage,
+)
+from backend.app.services.device_service import (
+    register_device,
+)
+from backend.app.services.payment_service import (
+    create_payment_order,
+    mark_payment_success,
+)
+from backend.app.services.subscription_service import (
+    activate_subscription,
+)
 
 
 client = TestClient(app)
@@ -12,26 +32,8 @@ def test_dashboard_requires_authentication() -> None:
 
     assert response.status_code == 401
 
+
 def test_dashboard_returns_user_summary() -> None:
-    import uuid
-
-    from sqlalchemy import delete, select
-
-    from backend.app.db.session import SessionLocal
-    from backend.app.models.subscription_plan import SubscriptionPlan
-    from backend.app.models.user import User
-    from backend.app.services.device_service import (
-        register_device,
-    )
-    from backend.app.services.payment_service import (
-        create_payment_order,
-    )
-    from backend.app.services.subscription_service import (
-        activate_subscription,
-    )
-    from backend.app.services.data_usage_service import (
-        record_usage,
-    )
     email = f"dashboard-{uuid.uuid4()}@example.com"
     password = "Strong-Test-Password-123!"
 
@@ -43,6 +45,7 @@ def test_dashboard_returns_user_summary() -> None:
                 "password": password,
             },
         )
+
         assert register_response.status_code == 201
 
         login_response = client.post(
@@ -52,6 +55,7 @@ def test_dashboard_returns_user_summary() -> None:
                 "password": password,
             },
         )
+
         assert login_response.status_code == 200
 
         token = login_response.json()["access_token"]
@@ -72,6 +76,22 @@ def test_dashboard_returns_user_summary() -> None:
             assert plan is not None
             assert user is not None
 
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            mark_payment_success(
+                database,
+                user_id=user.id,
+                payment_id=payment.id,
+                provider_transaction_id=(
+                    f"DASHBOARD-API-{uuid.uuid4()}"
+                ),
+            )
+
             activate_subscription(
                 database,
                 user_id=user.id,
@@ -82,13 +102,6 @@ def test_dashboard_returns_user_summary() -> None:
                 database,
                 user_id=user.id,
                 bytes_used=4096,
-            )
-
-            create_payment_order(
-                database,
-                user_id=user.id,
-                subscription_plan_id=plan.id,
-                provider="alipay",
             )
 
             register_device(
@@ -112,20 +125,36 @@ def test_dashboard_returns_user_summary() -> None:
 
         assert data["user"]["email"] == email
 
-        assert data["subscription"]["status"] == "active"
+        assert (
+            data["subscription"]["status"]
+            == "active"
+        )
 
-        assert data["usage"]["used_bytes"] == 4096
+        assert (
+            data["subscription"]["plan_name"]
+            == "Monthly Plan"
+        )
 
-        assert data["devices"]["total_devices"] == 1
+        assert (
+            data["usage"]["used_bytes"]
+            == 4096
+        )
+
+        assert (
+            data["devices"]["total_devices"]
+            == 1
+        )
 
         assert (
             data["payments"]["last_payment_status"]
-            == "pending"
+            == "success"
         )
 
     finally:
         with SessionLocal() as database:
             database.execute(
-                delete(User).where(User.email == email)
+                delete(User).where(
+                    User.email == email
+                )
             )
             database.commit()

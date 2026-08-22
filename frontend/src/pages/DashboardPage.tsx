@@ -2,9 +2,22 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
+  createPaymentOrder,
+  completePayment,
+} from "../api/payments";
+
+import { getStoredTokens } from "../auth/tokens";
+
+import {
+  getDashboard,
+  type DashboardData,
+} from "../api/dashboard";
+
+import {
   getSubscriptionPlans,
   type SubscriptionPlan,
 } from "../api/client";
+
 import { useAuth } from "../auth/AuthContext";
 
 
@@ -19,291 +32,596 @@ function formatPrice(plan: SubscriptionPlan): string {
   }).format(amount);
 }
 
+
 function formatDataLimit(bytes: number | null): string {
   if (bytes === null) {
     return "Unlimited data";
   }
 
   const gibibytes = bytes / 1024 ** 3;
+
   return `${gibibytes.toFixed(0)} GB data`;
 }
+
+
+function formatGB(bytes: number | null): string {
+  if (bytes === null) {
+    return "Unlimited";
+  }
+
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
 
 export function DashboardPage() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
-  const [isSigningOut, setIsSigningOut] = useState(false);
-  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
-  const [plansError, setPlansError] = useState("");
+  const [isSigningOut, setIsSigningOut] =
+    useState(false);
+
+  const [plans, setPlans] =
+    useState<SubscriptionPlan[]>([]);
+
+  const [plansError, setPlansError] =
+    useState("");
+
   const [arePlansLoading, setArePlansLoading] =
     useState(true);
 
-  useEffect(() => {
-    let isActive = true;
+  const [currentPaymentId, setCurrentPaymentId] =
+    useState<string | null>(null);
 
-    async function loadPlans(): Promise<void> {
+  const [
+    currentPaymentPlanId,
+    setCurrentPaymentPlanId,
+  ] = useState<string | null>(null);
+
+  const [
+    isCreatingPayment,
+    setIsCreatingPayment,
+  ] = useState(false);
+
+  const [
+    isCompletingPayment,
+    setIsCompletingPayment,
+  ] = useState(false);
+
+  const [dashboard, setDashboard] =
+    useState<DashboardData | null>(null);
+
+  const [dashboardError, setDashboardError] =
+    useState("");
+
+  const [
+    isDashboardLoading,
+    setIsDashboardLoading,
+  ] = useState(true);
+
+
+  async function refreshDashboard(): Promise<void> {
+    const tokens = getStoredTokens();
+
+    if (!tokens) {
+      return;
+    }
+
+    const data = await getDashboard(
+      tokens.accessToken,
+    );
+
+    setDashboard(data);
+    setDashboardError("");
+  }
+
+
+  useEffect(() => {
+    async function loadPlans() {
       try {
-        const availablePlans =
+        const data =
           await getSubscriptionPlans();
 
-        if (isActive) {
-          setPlans(availablePlans);
-        }
+        setPlans(data);
       } catch {
-        if (isActive) {
-          setPlansError(
-            "Plans are temporarily unavailable.",
-          );
-        }
+        setPlansError(
+          "Plans are temporarily unavailable.",
+        );
       } finally {
-        if (isActive) {
-          setArePlansLoading(false);
-        }
+        setArePlansLoading(false);
       }
     }
 
     void loadPlans();
-
-    return () => {
-      isActive = false;
-    };
   }, []);
 
-  async function handleSignOut(): Promise<void> {
+
+  useEffect(() => {
+    async function loadDashboard() {
+      try {
+        await refreshDashboard();
+      } catch {
+        setDashboardError(
+          "Dashboard data unavailable.",
+        );
+      } finally {
+        setIsDashboardLoading(false);
+      }
+    }
+
+    void loadDashboard();
+  }, []);
+
+
+  async function handleSubscribe(
+    planId: string,
+  ): Promise<void> {
+    if (isCreatingPayment) {
+      return;
+    }
+
+    const tokens = getStoredTokens();
+
+    if (!tokens) {
+      return;
+    }
+
+    setIsCreatingPayment(true);
+
+    try {
+      const payment =
+        await createPaymentOrder(
+          tokens.accessToken,
+          planId,
+        );
+
+      setCurrentPaymentId(payment.id);
+      setCurrentPaymentPlanId(planId);
+
+      try {
+        await refreshDashboard();
+      } catch {
+        // Payment creation succeeded even if
+        // dashboard refresh temporarily fails.
+      }
+
+      alert(
+        `Payment created: ${payment.status}`,
+      );
+    } catch {
+      alert(
+        "Payment creation failed",
+      );
+    } finally {
+      setIsCreatingPayment(false);
+    }
+  }
+
+
+  async function handleCompletePayment():
+    Promise<void> {
+    const tokens = getStoredTokens();
+
+    if (
+      !tokens ||
+      !currentPaymentId ||
+      isCompletingPayment
+    ) {
+      return;
+    }
+
+    setIsCompletingPayment(true);
+
+    try {
+      const payment =
+        await completePayment(
+          tokens.accessToken,
+          currentPaymentId,
+        );
+
+      /*
+       * Clear the pending payment only AFTER
+       * the backend confirms success.
+       */
+      setCurrentPaymentId(null);
+      setCurrentPaymentPlanId(null);
+
+      /*
+       * Reload the dashboard so the new
+       * subscription, device limit,
+       * data quota and payment status
+       * appear immediately.
+       */
+      await refreshDashboard();
+
+      alert(
+        `Payment status: ${payment.status}`,
+      );
+    } catch {
+      alert(
+        "Payment completion failed",
+      );
+    } finally {
+      setIsCompletingPayment(false);
+    }
+  }
+
+
+  async function handleSignOut() {
     setIsSigningOut(true);
+
     await signOut();
 
-    navigate("/login", {
-      replace: true,
-      state: {
-        message: "You have been signed out securely.",
+    navigate(
+      "/login",
+      {
+        replace: true,
       },
-    });
+    );
   }
+
 
   return (
     <div className="dashboard-shell">
+
       <aside className="sidebar">
+
         <div>
+
           <div className="brand dashboard-brand">
-            <span className="brand-mark">Z</span>
-            <span>ZELVION</span>
+
+            <span className="brand-mark">
+              Z
+            </span>
+
+            <span>
+              ZELVION
+            </span>
+
           </div>
 
-          <nav className="sidebar-nav" aria-label="Dashboard">
-            <a className="nav-item active" href="#overview">
-              <span>Overview</span>
+
+          <nav className="sidebar-nav">
+
+            <a className="nav-item active">
+              Overview
             </a>
-            <a className="nav-item" href="#devices">
-              <span>Devices</span>
+
+            <a className="nav-item">
+              Devices
             </a>
-            <a className="nav-item" href="#subscription">
-              <span>Subscription</span>
+
+            <a className="nav-item">
+              Subscription
             </a>
-            <a className="nav-item" href="#usage">
-              <span>Usage</span>
+
+            <a className="nav-item">
+              Usage
             </a>
+
           </nav>
+
         </div>
+
 
         <div className="sidebar-footer">
-          <span className="sidebar-label">Signed in as</span>
-          <strong>{user?.email}</strong>
+
+          <span className="sidebar-label">
+            Signed in as
+          </span>
+
+          <strong>
+            {user?.email}
+          </strong>
+
           <button
             className="text-button"
-            type="button"
-            onClick={() => void handleSignOut()}
+            onClick={() =>
+              void handleSignOut()
+            }
             disabled={isSigningOut}
           >
-            {isSigningOut ? "Signing out..." : "Sign out"}
+            {
+              isSigningOut
+                ? "Signing out..."
+                : "Sign out"
+            }
           </button>
+
         </div>
+
       </aside>
 
+
       <main className="dashboard-main">
+
         <header className="dashboard-header">
+
           <div>
-            <span className="eyebrow">Account overview</span>
-            <h1>Welcome to ZELVION</h1>
+
+            <span className="eyebrow">
+              Account overview
+            </span>
+
+            <h1>
+              Welcome to ZELVION
+            </h1>
+
             <p>
-              Manage your account, subscription, devices,
-              and protected connections.
+              Manage your subscription,
+              devices and protected connections.
             </p>
+
           </div>
 
-          <div className="account-badge">
-            <span className="status-dot" />
-            Account active
-          </div>
         </header>
 
-        <section className="status-grid" id="overview">
-          <article className="status-card featured">
-            <div className="card-label">Protection status</div>
-            <div className="protection-state">
-              <span className="shield-icon">Z</span>
-              <div>
-                <strong>Not connected</strong>
-                <p>
-                  Secure network service is not configured yet.
-                </p>
-              </div>
-            </div>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled
-            >
-              Connect unavailable
-            </button>
-          </article>
+
+        {dashboardError && (
+          <div className="error-message">
+            {dashboardError}
+          </div>
+        )}
+
+
+        <section className="status-grid">
 
           <article className="status-card">
-            <div className="card-label">Subscription</div>
-            <strong className="card-value">
-              No active plan
-            </strong>
-            <p>
-              Choose a plan below to prepare your account.
-            </p>
-          </article>
 
-          <article className="status-card" id="devices">
             <div className="card-label">
-              Registered devices
+              Subscription
             </div>
-            <strong className="card-value">0 / 3</strong>
+
+            <strong className="card-value">
+              {
+                isDashboardLoading
+                  ? "Loading..."
+                  : dashboard
+                    ?.subscription
+                    .plan_name
+                    ?? "No Plan"
+              }
+            </strong>
+
             <p>
-              Device management has not been enabled yet.
+              Status:{" "}
+              {
+                dashboard
+                  ?.subscription
+                  .status
+                  ?? "Inactive"
+              }
             </p>
+
           </article>
 
-          <article className="status-card" id="usage">
-            <div className="card-label">Traffic usage</div>
-            <strong className="card-value">0 GB</strong>
+
+          <article className="status-card">
+
+            <div className="card-label">
+              Devices
+            </div>
+
+            <strong className="card-value">
+              {
+                dashboard
+                  ? `${dashboard.devices.total_devices}/${dashboard.devices.max_devices ?? "∞"}`
+                  : "Loading..."
+              }
+            </strong>
+
             <p>
-              Usage tracking begins after service activation.
+              Registered devices
             </p>
+
           </article>
+
+
+          <article className="status-card">
+
+            <div className="card-label">
+              Data Usage
+            </div>
+
+            <strong className="card-value">
+              {
+                formatGB(
+                  dashboard
+                    ?.usage
+                    .used_bytes
+                    ?? null,
+                )
+              }
+            </strong>
+
+            <p>
+              Remaining:{" "}
+              {
+                formatGB(
+                  dashboard
+                    ?.usage
+                    .remaining_bytes
+                    ?? null,
+                )
+              }
+            </p>
+
+          </article>
+
+
+          <article className="status-card">
+
+            <div className="card-label">
+              Payment
+            </div>
+
+            <strong className="card-value">
+              {
+                dashboard
+                  ?.payments
+                  .last_payment_status
+                  ?? "No Payment"
+              }
+            </strong>
+
+          </article>
+
         </section>
 
-        <section
-          className="plans-section"
-          id="subscription"
-        >
-          <div className="section-heading plans-heading">
-            <div>
-              <span className="eyebrow">Plans</span>
-              <h2>Choose your access period</h2>
-              <p>
-                Simple CNY pricing with clear data and
-                device limits.
-              </p>
-            </div>
+
+        <section className="plans-section">
+
+          <div className="section-heading">
+
+            <span className="eyebrow">
+              Plans
+            </span>
+
+            <h2>
+              Choose your access period
+            </h2>
+
           </div>
 
-          {arePlansLoading && (
-            <p className="plans-message">
-              Loading available plans...
-            </p>
-          )}
 
-          {plansError && (
-            <div className="error-message" role="alert">
-              {plansError}
-            </div>
-          )}
+          {
+            arePlansLoading && (
+              <p>
+                Loading plans...
+              </p>
+            )
+          }
 
-          {!arePlansLoading && !plansError && (
-            <div className="plans-grid">
-              {plans.map((plan) => (
-                <article className="plan-card" key={plan.id}>
-                  <div>
-                    <span className="plan-code">
-                      {plan.duration_days === 1
-                        ? "Flexible access"
-                        : "Best monthly value"}
-                    </span>
-                    <h3>{plan.name}</h3>
-                    <div className="plan-price">
-                      {formatPrice(plan)}
-                    </div>
-                    <p className="plan-description">
-                      {plan.description}
-                    </p>
+
+          {
+            plansError && (
+              <p className="error-message">
+                {plansError}
+              </p>
+            )
+          }
+
+
+          <div className="plans-grid">
+
+            {
+              plans.map((plan) => (
+
+                <article
+                  className="plan-card"
+                  key={plan.id}
+                >
+
+                  <h3>
+                    {plan.name}
+                  </h3>
+
+                  <div className="plan-price">
+                    {formatPrice(plan)}
                   </div>
 
-                  <ul className="plan-features">
+                  <p>
+                    {plan.description}
+                  </p>
+
+                  <ul>
+
                     <li>
-                      {plan.duration_days}{" "}
-                      {plan.duration_days === 1
-                        ? "day"
-                        : "days"}{" "}
-                      of access
+                      {plan.duration_days} days
                     </li>
+
                     <li>
-                      {formatDataLimit(
-                        plan.data_limit_bytes,
-                      )}
+                      {
+                        formatDataLimit(
+                          plan.data_limit_bytes,
+                        )
+                      }
                     </li>
+
                     <li>
-                      Up to {plan.max_devices}{" "}
-                      {plan.max_devices === 1
-                        ? "device"
-                        : "devices"}
+                      {plan.max_devices} devices
                     </li>
-                    <li>Secure account authentication</li>
+
                   </ul>
+
 
                   <button
                     className="plan-button"
                     type="button"
-                    disabled
+                    disabled={
+                      isCreatingPayment ||
+                      isCompletingPayment
+                    }
+                    onClick={() =>
+                      void handleSubscribe(
+                        plan.id,
+                      )
+                    }
                   >
-                    Purchase coming next
+                    {
+                      isCreatingPayment &&
+                      currentPaymentPlanId === plan.id
+                        ? "Creating Payment..."
+                        : "Subscribe"
+                    }
                   </button>
+
+
+                  {
+                    currentPaymentId &&
+                    currentPaymentPlanId ===
+                      plan.id && (
+                      <button
+                        className="plan-button"
+                        type="button"
+                        disabled={
+                          isCompletingPayment
+                        }
+                        onClick={() =>
+                          void handleCompletePayment()
+                        }
+                      >
+                        {
+                          isCompletingPayment
+                            ? "Completing..."
+                            : "Complete Payment"
+                        }
+                      </button>
+                    )
+                  }
+
                 </article>
-              ))}
-            </div>
-          )}
+
+              ))
+            }
+
+          </div>
+
         </section>
+
 
         <section className="account-section">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Profile</span>
-              <h2>Account details</h2>
-            </div>
-          </div>
 
-          <div className="details-grid">
-            <div>
-              <span>Email</span>
-              <strong>{user?.email}</strong>
-            </div>
-            <div>
-              <span>Verification</span>
-              <strong>
-                {user?.is_verified
-                  ? "Verified"
-                  : "Not verified"}
-              </strong>
-            </div>
-            <div>
-              <span>Account status</span>
-              <strong>
-                {user?.is_active ? "Active" : "Inactive"}
-              </strong>
-            </div>
-            <div>
-              <span>User ID</span>
-              <strong className="user-id">
-                {user?.id}
-              </strong>
-            </div>
-          </div>
+          <h2>
+            Account details
+          </h2>
+
+          <p>
+            Email: {user?.email}
+          </p>
+
+          <p>
+            Status:{" "}
+            {
+              user?.is_active
+                ? "Active"
+                : "Inactive"
+            }
+          </p>
+
         </section>
+
       </main>
+
     </div>
   );
 }
