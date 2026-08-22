@@ -1,8 +1,14 @@
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.app.api.v1.router import api_router
 from backend.app.core.config import Settings, get_settings
+
+
+logger = logging.getLogger("zelvion.api")
 
 
 def create_app(
@@ -42,6 +48,34 @@ def create_app(
             "Content-Type",
         ],
     )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        """
+        Log unexpected server errors internally while
+        returning only a generic response to the client.
+        """
+
+        logger.error(
+            "Unhandled exception during %s %s",
+            request.method,
+            request.url.path,
+            exc_info=(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            ),
+        )
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal server error",
+            },
+        )
 
     app.include_router(
         api_router,

@@ -90,3 +90,49 @@ def test_production_disables_api_documentation() -> None:
     )
 
     assert health_response.status_code == 200
+
+def test_unhandled_error_returns_generic_response() -> None:
+    test_settings = Settings(
+        environment="development",
+        frontend_origin="http://localhost:5173",
+        db_host="localhost",
+        db_port=5432,
+        db_name="zelvion_test",
+        db_user="zelvion",
+        db_password="test-database-password",
+        jwt_secret_key=(
+            "this-is-a-secure-development-test-secret-123456"
+        ),
+        enable_mock_subscription_activation=False,
+        _env_file=None,
+    )
+
+    test_app = create_app(
+        test_settings,
+    )
+
+    @test_app.get("/test-error")
+    def test_error() -> None:
+        raise RuntimeError(
+            "sensitive internal test error"
+        )
+
+    test_client = TestClient(
+        test_app,
+        raise_server_exceptions=False,
+    )
+
+    response = test_client.get(
+        "/test-error",
+    )
+
+    assert response.status_code == 500
+
+    assert response.json() == {
+        "detail": "Internal server error",
+    }
+
+    assert (
+        "sensitive internal test error"
+        not in response.text
+    )
