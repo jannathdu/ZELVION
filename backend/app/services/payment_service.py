@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.models.payment_transaction import PaymentTransaction
 from backend.app.models.subscription_plan import SubscriptionPlan
+from backend.app.models.user import User
 from backend.app.models.user_subscription import UserSubscription
 
 
@@ -35,13 +36,7 @@ def get_payment_for_update(
     user_id: uuid.UUID,
     payment_id: uuid.UUID,
 ) -> PaymentTransaction:
-    """
-    Return and lock a payment belonging to the user.
-
-    The row lock allows payment-success processing to inspect
-    and update a payment without a concurrent callback changing
-    the same row in between.
-    """
+    """Return and lock a payment belonging to the user."""
 
     payment = database.scalar(
         select(PaymentTransaction)
@@ -65,9 +60,26 @@ def create_payment_order(
     subscription_plan_id: uuid.UUID,
     provider: str,
 ) -> PaymentTransaction:
-    """Create a pending payment transaction."""
+    """
+    Create a pending payment transaction.
+
+    Payment creation for the same user is serialized
+    by locking the user row. If an identical pending
+    payment already exists for the same plan/provider,
+    that payment is returned instead of creating a
+    duplicate.
+    """
 
     now = datetime.now(timezone.utc)
+
+    # Serialize payment creation for this user.
+    database.scalar(
+        select(User)
+        .where(
+            User.id == user_id,
+        )
+        .with_for_update()
+    )
 
     active_subscription = database.scalar(
         select(UserSubscription).where(
@@ -78,6 +90,7 @@ def create_payment_order(
     )
 
     if active_subscription is not None:
+        database.rollback()
         raise ActiveSubscriptionPaymentError
 
     plan = database.scalar(
@@ -88,7 +101,29 @@ def create_payment_order(
     )
 
     if plan is None:
+        database.rollback()
         raise PlanNotFoundError
+
+    existing_payment = database.scalar(
+        select(PaymentTransaction)
+        .where(
+            PaymentTransaction.user_id == user_id,
+            PaymentTransaction.subscription_plan_id
+            == subscription_plan_id,
+            PaymentTransaction.provider == provider,
+            PaymentTransaction.status == "pending",
+        )
+        .order_by(
+            PaymentTransaction.created_at.desc(),
+        )
+    )
+
+    if existing_payment is not None:
+        # Release the user-row lock before returning.
+        database.commit()
+        database.refresh(existing_payment)
+
+        return existing_payment
 
     payment = PaymentTransaction(
         user_id=user_id,

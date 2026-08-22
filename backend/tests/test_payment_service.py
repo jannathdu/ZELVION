@@ -1,10 +1,11 @@
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, func, select
 
 from backend.app.db.session import SessionLocal
 from backend.app.models.subscription_plan import SubscriptionPlan
 from backend.app.models.user import User
+from backend.app.models.payment_transaction import PaymentTransaction
 from backend.app.services.payment_service import (
     InvalidPaymentStatusError,
     PaymentNotFoundError,
@@ -318,5 +319,150 @@ def test_get_payment_history_returns_user_payments() -> None:
         with SessionLocal() as database:
             database.execute(
                 delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_create_payment_order_reuses_identical_pending_payment() -> None:
+    email = f"payment-reuse-{uuid.uuid4()}@example.com"
+
+    try:
+        with SessionLocal() as database:
+            user = User(
+                email=email,
+                password_hash="test-only-password-hash",
+            )
+
+            database.add(user)
+            database.commit()
+            database.refresh(user)
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+
+            first_payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            second_payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            assert second_payment.id == first_payment.id
+
+            payment_count = (
+                database.scalar(
+                    select(
+                        func.count(
+                            PaymentTransaction.id
+                        )
+                    ).where(
+                        PaymentTransaction.user_id == user.id,
+                        PaymentTransaction.status == "pending",
+                        PaymentTransaction.subscription_plan_id
+                        == plan.id,
+                        PaymentTransaction.provider == "alipay",
+                    )
+                )
+                or 0
+            )
+
+            assert payment_count == 1
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+
+def test_create_payment_order_locks_user_row() -> None:
+    email = f"payment-lock-{uuid.uuid4()}@example.com"
+
+    executed_statements: list[str] = []
+
+    try:
+        with SessionLocal() as database:
+            user = User(
+                email=email,
+                password_hash="test-only-password-hash",
+            )
+
+            database.add(user)
+            database.commit()
+            database.refresh(user)
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+
+            bind = database.get_bind()
+
+            def capture_statement(
+                conn,
+                cursor,
+                statement,
+                parameters,
+                context,
+                executemany,
+            ) -> None:
+                executed_statements.append(statement)
+
+            event.listen(
+                bind,
+                "before_cursor_execute",
+                capture_statement,
+            )
+
+            try:
+                create_payment_order(
+                    database,
+                    user_id=user.id,
+                    subscription_plan_id=plan.id,
+                    provider="alipay",
+                )
+            finally:
+                event.remove(
+                    bind,
+                    "before_cursor_execute",
+                    capture_statement,
+                )
+
+            user_queries = [
+                statement.upper()
+                for statement in executed_statements
+                if "FROM USERS" in statement.upper()
+            ]
+
+            assert user_queries
+
+            assert any(
+                "FOR UPDATE" in statement
+                for statement in user_queries
+            )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
             )
             database.commit()
