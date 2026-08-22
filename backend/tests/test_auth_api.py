@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, event
 
 from backend.app.db.session import SessionLocal
 from backend.app.main import app
@@ -142,4 +142,99 @@ def test_registration_login_and_refresh_flow() -> None:
             database.execute(
                 delete(User).where(User.email == email)
             )
+            database.commit()
+
+def test_refresh_token_session_is_row_locked() -> None:
+    email = (
+        f"auth-lock-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    executed_statements: list[str] = []
+
+    try:
+        registration_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        assert registration_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        assert login_response.status_code == 200
+
+        refresh_token = (
+            login_response.json()["refresh_token"]
+        )
+
+        with SessionLocal() as database:
+            bind = database.get_bind()
+
+        def capture_statement(
+            conn,
+            cursor,
+            statement,
+            parameters,
+            context,
+            executemany,
+        ) -> None:
+            executed_statements.append(
+                statement,
+            )
+
+        event.listen(
+            bind,
+            "before_cursor_execute",
+            capture_statement,
+        )
+
+        try:
+            refresh_response = client.post(
+                "/api/v1/auth/refresh",
+                json={
+                    "refresh_token": refresh_token,
+                },
+            )
+        finally:
+            event.remove(
+                bind,
+                "before_cursor_execute",
+                capture_statement,
+            )
+
+        assert refresh_response.status_code == 200
+
+        refresh_session_queries = [
+            statement.upper()
+            for statement in executed_statements
+            if "REFRESH_SESSIONS"
+            in statement.upper()
+        ]
+
+        assert refresh_session_queries
+
+        assert any(
+            "FOR UPDATE" in statement
+            for statement
+            in refresh_session_queries
+        )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+
             database.commit()
