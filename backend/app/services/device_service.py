@@ -42,6 +42,9 @@ def register_device(
 
     now = registered_at or datetime.now(timezone.utc)
 
+    # Lock the active subscription row so concurrent
+    # registrations for the same subscription cannot
+    # both pass the device-limit check.
     subscription = database.scalar(
         select(UserSubscription)
         .where(
@@ -50,6 +53,7 @@ def register_device(
             UserSubscription.ends_at > now,
         )
         .order_by(UserSubscription.ends_at.desc())
+        .with_for_update()
     )
 
     if subscription is None:

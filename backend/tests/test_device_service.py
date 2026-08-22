@@ -1,7 +1,7 @@
 id="device_test_1"
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select
 
 from backend.app.db.session import SessionLocal
 from backend.app.models.subscription_plan import SubscriptionPlan
@@ -338,5 +338,90 @@ def test_list_user_devices_returns_user_devices() -> None:
         with SessionLocal() as database:
             database.execute(
                 delete(User).where(User.email == email)
+            )
+            database.commit()
+
+def test_register_device_locks_active_subscription() -> None:
+    email = f"device-lock-{uuid.uuid4()}@example.com"
+
+    executed_statements: list[str] = []
+
+    try:
+        with SessionLocal() as database:
+            user = User(
+                email=email,
+                password_hash="test-only-password-hash",
+            )
+            database.add(user)
+            database.commit()
+            database.refresh(user)
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert plan is not None
+
+            activate_subscription(
+                database,
+                user_id=user.id,
+                plan_id=plan.id,
+            )
+
+            bind = database.get_bind()
+
+            def capture_statement(
+                conn,
+                cursor,
+                statement,
+                parameters,
+                context,
+                executemany,
+            ) -> None:
+                executed_statements.append(statement)
+
+            event.listen(
+                bind,
+                "before_cursor_execute",
+                capture_statement,
+            )
+
+            try:
+                register_device(
+                    database,
+                    user_id=user.id,
+                    device_key_hash=(
+                        f"device-lock-{uuid.uuid4()}"
+                    ),
+                    name="Lock Test Device",
+                    platform="test",
+                )
+            finally:
+                event.remove(
+                    bind,
+                    "before_cursor_execute",
+                    capture_statement,
+                )
+
+            subscription_queries = [
+                statement.upper()
+                for statement in executed_statements
+                if "USER_SUBSCRIPTIONS" in statement.upper()
+            ]
+
+            assert subscription_queries
+            assert any(
+                "FOR UPDATE" in statement
+                for statement in subscription_queries
+            )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
             )
             database.commit()
