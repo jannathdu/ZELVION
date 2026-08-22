@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+} from "react-router-dom";
 
 import {
   createPaymentOrder,
@@ -286,9 +289,12 @@ export function DashboardPage() {
               Overview
             </a>
 
-            <a className="nav-item">
-              Devices
-            </a>
+            <Link
+  className="nav-item"
+  to="/devices"
+>
+  Devices
+</Link>
 
             <a className="nav-item">
               Subscription
