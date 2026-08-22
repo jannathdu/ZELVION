@@ -32,6 +32,8 @@ def record_usage(
 
     now = recorded_at or datetime.now(timezone.utc)
 
+    # Serialize concurrent usage writes for the same
+    # active subscription so quota checks cannot race.
     subscription = database.scalar(
         select(UserSubscription)
         .where(
@@ -40,6 +42,7 @@ def record_usage(
             UserSubscription.ends_at > now,
         )
         .order_by(UserSubscription.ends_at.desc())
+        .with_for_update()
     )
 
     if subscription is None:
@@ -47,13 +50,22 @@ def record_usage(
 
     if subscription.data_limit_bytes is not None:
         used_bytes = database.scalar(
-            select(func.coalesce(func.sum(DataUsage.bytes_used), 0))
+            select(
+                func.coalesce(
+                    func.sum(DataUsage.bytes_used),
+                    0,
+                )
+            )
             .where(
-                DataUsage.subscription_id == subscription.id,
+                DataUsage.subscription_id
+                == subscription.id,
             )
         )
 
-        if used_bytes + bytes_used > subscription.data_limit_bytes:
+        if (
+            used_bytes + bytes_used
+            > subscription.data_limit_bytes
+        ):
             raise DataQuotaExceededError
 
     usage = DataUsage(
@@ -69,6 +81,7 @@ def record_usage(
     database.refresh(usage)
 
     return usage
+
 
 def get_usage_summary(
     database: Session,
@@ -93,9 +106,15 @@ def get_usage_summary(
         raise NoActiveSubscriptionError
 
     used_bytes = database.scalar(
-        select(func.coalesce(func.sum(DataUsage.bytes_used), 0))
+        select(
+            func.coalesce(
+                func.sum(DataUsage.bytes_used),
+                0,
+            )
+        )
         .where(
-            DataUsage.subscription_id == subscription.id,
+            DataUsage.subscription_id
+            == subscription.id,
         )
     )
 
@@ -103,7 +122,8 @@ def get_usage_summary(
 
     if subscription.data_limit_bytes is not None:
         remaining_bytes = max(
-            subscription.data_limit_bytes - used_bytes,
+            subscription.data_limit_bytes
+            - used_bytes,
             0,
         )
 
