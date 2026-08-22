@@ -29,6 +29,35 @@ class ActiveSubscriptionPaymentError(PaymentServiceError):
     """Raised when a user already has a valid active subscription."""
 
 
+def get_payment_for_update(
+    database: Session,
+    *,
+    user_id: uuid.UUID,
+    payment_id: uuid.UUID,
+) -> PaymentTransaction:
+    """
+    Return and lock a payment belonging to the user.
+
+    The row lock allows payment-success processing to inspect
+    and update a payment without a concurrent callback changing
+    the same row in between.
+    """
+
+    payment = database.scalar(
+        select(PaymentTransaction)
+        .where(
+            PaymentTransaction.id == payment_id,
+            PaymentTransaction.user_id == user_id,
+        )
+        .with_for_update()
+    )
+
+    if payment is None:
+        raise PaymentNotFoundError
+
+    return payment
+
+
 def create_payment_order(
     database: Session,
     *,
@@ -93,17 +122,11 @@ def mark_payment_success(
     to be committed as one atomic database transaction.
     """
 
-    payment = database.scalar(
-        select(PaymentTransaction)
-        .where(
-            PaymentTransaction.id == payment_id,
-            PaymentTransaction.user_id == user_id,
-        )
-        .with_for_update()
+    payment = get_payment_for_update(
+        database,
+        user_id=user_id,
+        payment_id=payment_id,
     )
-
-    if payment is None:
-        raise PaymentNotFoundError
 
     if payment.status != "pending":
         raise InvalidPaymentStatusError

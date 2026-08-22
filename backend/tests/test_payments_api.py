@@ -8,6 +8,7 @@ from backend.app.main import app
 from backend.app.models.payment_transaction import PaymentTransaction
 from backend.app.models.subscription_plan import SubscriptionPlan
 from backend.app.models.user import User
+from backend.app.models.user_subscription import UserSubscription
 from backend.app.services.payment_service import (
     create_payment_order,
 )
@@ -497,6 +498,216 @@ def test_payment_success_rolls_back_if_subscription_activation_fails() -> None:
             assert payment.status == "pending"
             assert payment.provider_transaction_id is None
             assert payment.paid_at is None
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_payment_success_retry_is_idempotent() -> None:
+    email = (
+        f"payment-idempotent-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    provider_transaction_id = (
+        f"ALI-IDEMPOTENT-{uuid.uuid4()}"
+    )
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        assert register_response.status_code == 201
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        assert login_response.status_code == 200
+
+        token = login_response.json()["access_token"]
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = payment.id
+
+        first_response = client.post(
+            f"/api/v1/payments/{payment_id}/success",
+            headers={
+                "Authorization": f"Bearer {token}",
+            },
+            json={
+                "provider_transaction_id": (
+                    provider_transaction_id
+                ),
+            },
+        )
+
+        assert first_response.status_code == 200
+        assert first_response.json()["status"] == "success"
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            assert user is not None
+
+            subscription = database.scalar(
+                select(UserSubscription).where(
+                    UserSubscription.user_id == user.id,
+                    UserSubscription.status == "active",
+                )
+            )
+
+            assert subscription is not None
+
+            subscription_id = subscription.id
+            original_ends_at = subscription.ends_at
+
+            subscription_count_before = (
+                database.scalar(
+                    select(
+                        func.count(
+                            UserSubscription.id
+                        )
+                    ).where(
+                        UserSubscription.user_id
+                        == user.id
+                    )
+                )
+                or 0
+            )
+
+        # Retry the exact same callback.
+        retry_response = client.post(
+            f"/api/v1/payments/{payment_id}/success",
+            headers={
+                "Authorization": f"Bearer {token}",
+            },
+            json={
+                "provider_transaction_id": (
+                    provider_transaction_id
+                ),
+            },
+        )
+
+        assert retry_response.status_code == 200
+        assert retry_response.json()["status"] == "success"
+        assert (
+            retry_response.json()["provider_transaction_id"]
+            == provider_transaction_id
+        )
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            assert user is not None
+
+            subscription_count_after = (
+                database.scalar(
+                    select(
+                        func.count(
+                            UserSubscription.id
+                        )
+                    ).where(
+                        UserSubscription.user_id
+                        == user.id
+                    )
+                )
+                or 0
+            )
+
+            subscription = database.scalar(
+                select(UserSubscription).where(
+                    UserSubscription.id
+                    == subscription_id,
+                )
+            )
+
+            assert subscription is not None
+
+            # Replay must not create or extend
+            # another subscription.
+            assert (
+                subscription_count_after
+                == subscription_count_before
+            )
+            assert subscription.ends_at == original_ends_at
+
+        # Same payment, different provider transaction
+        # must NOT overwrite the completed payment.
+        mismatch_response = client.post(
+            f"/api/v1/payments/{payment_id}/success",
+            headers={
+                "Authorization": f"Bearer {token}",
+            },
+            json={
+                "provider_transaction_id": (
+                    f"ALI-DIFFERENT-{uuid.uuid4()}"
+                ),
+            },
+        )
+
+        assert mismatch_response.status_code == 409
+        assert mismatch_response.json()["detail"] == (
+            "Invalid payment status"
+        )
+
+        with SessionLocal() as database:
+            payment = database.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.id == payment_id,
+                )
+            )
+
+            assert payment is not None
+            assert payment.status == "success"
+            assert (
+                payment.provider_transaction_id
+                == provider_transaction_id
+            )
 
     finally:
         with SessionLocal() as database:

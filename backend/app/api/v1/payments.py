@@ -1,7 +1,12 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import CurrentUser
@@ -19,6 +24,7 @@ from backend.app.services.payment_service import (
     PaymentNotFoundError,
     PlanNotFoundError,
     create_payment_order,
+    get_payment_for_update,
     get_payment_history,
     mark_payment_success,
 )
@@ -94,6 +100,35 @@ def payment_success(
         )
 
     try:
+        # Lock and inspect the payment before making
+        # any state transition.
+        existing_payment = get_payment_for_update(
+            database,
+            user_id=current_user.id,
+            payment_id=payment_id,
+        )
+
+        # Idempotent callback replay:
+        # the same successful provider transaction
+        # returns the existing payment and must NOT
+        # activate the subscription again.
+        if existing_payment.status == "success":
+            if (
+                existing_payment.provider_transaction_id
+                == payload.provider_transaction_id
+            ):
+                database.commit()
+                database.refresh(existing_payment)
+
+                return existing_payment
+
+            # A completed payment may not be overwritten
+            # with another provider transaction.
+            raise InvalidPaymentStatusError
+
+        if existing_payment.status != "pending":
+            raise InvalidPaymentStatusError
+
         # Do not commit payment success yet.
         payment = mark_payment_success(
             database,
