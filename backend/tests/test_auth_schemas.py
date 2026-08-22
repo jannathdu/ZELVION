@@ -1,7 +1,11 @@
 import pytest
 from pydantic import ValidationError
 
-from backend.app.schemas.auth import LoginRequest, RegisterRequest
+from backend.app.schemas.auth import (
+    LoginRequest,
+    RefreshTokenRequest,
+    RegisterRequest,
+)
 
 
 def test_valid_registration_data() -> None:
@@ -48,3 +52,17 @@ def test_login_accepts_existing_password_format() -> None:
     )
 
     assert str(login.email) == "user@example.com"
+
+def test_refresh_token_rejects_excessive_length() -> None:
+    with pytest.raises(ValidationError):
+        RefreshTokenRequest(
+            refresh_token="x" * 4097,
+        )
+
+
+def test_refresh_token_accepts_normal_length() -> None:
+    request = RefreshTokenRequest(
+        refresh_token="test-refresh-token",
+    )
+
+    assert request.refresh_token == "test-refresh-token"
