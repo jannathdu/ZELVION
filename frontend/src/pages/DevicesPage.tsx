@@ -264,9 +264,12 @@ export function DevicesPage() {
               Devices
             </Link>
 
-            <a className="nav-item">
-              Subscription
-            </a>
+            <Link
+  className="nav-item"
+  to="/subscription"
+>
+  Subscription
+</Link>
 
             <a className="nav-item">
               Usage

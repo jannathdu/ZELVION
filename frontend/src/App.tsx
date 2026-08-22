@@ -9,6 +9,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { DevicesPage } from "./pages/DevicesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { SubscriptionPage } from "./pages/SubscriptionPage";
 import { UsagePage } from "./pages/UsagePage";
 
 
@@ -47,6 +48,11 @@ function App() {
         <Route
           path="/devices"
           element={<DevicesPage />}
+        />
+
+        <Route
+          path="/subscription"
+          element={<SubscriptionPage />}
         />
 
         <Route

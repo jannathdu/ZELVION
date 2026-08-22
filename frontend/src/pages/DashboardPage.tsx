@@ -296,9 +296,12 @@ export function DashboardPage() {
   Devices
 </Link>
 
-            <a className="nav-item">
-              Subscription
-            </a>
+           <Link
+  className="nav-item"
+  to="/subscription"
+>
+  Subscription
+</Link>
 
             <Link
   className="nav-item"

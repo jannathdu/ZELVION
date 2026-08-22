@@ -179,10 +179,12 @@ export function UsagePage() {
               Devices
             </Link>
 
-            <a className="nav-item">
-              Subscription
-            </a>
-
+           <Link
+  className="nav-item"
+  to="/subscription"
+>
+  Subscription
+</Link>
             <Link
               className="nav-item active"
               to="/usage"
