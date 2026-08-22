@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
-from backend.app.main import app
+from backend.app.core.config import Settings
+from backend.app.main import app, create_app
 
 
 client = TestClient(app)
@@ -42,3 +43,50 @@ def test_unknown_frontend_origin_is_rejected() -> None:
 
     assert response.status_code == 400
     assert "access-control-allow-origin" not in response.headers
+
+def test_production_disables_api_documentation() -> None:
+    production_settings = Settings(
+        environment="production",
+        frontend_origin="https://app.zelvion.com",
+        db_host="localhost",
+        db_port=5432,
+        db_name="zelvion_test",
+        db_user="zelvion",
+        db_password="test-database-password",
+        jwt_secret_key=(
+            "this-is-a-secure-production-test-secret-123456"
+        ),
+        enable_mock_subscription_activation=False,
+        _env_file=None,
+    )
+
+    production_app = create_app(
+        production_settings,
+    )
+
+    production_client = TestClient(
+        production_app,
+    )
+
+    assert (
+        production_client.get("/docs").status_code
+        == 404
+    )
+
+    assert (
+        production_client.get("/redoc").status_code
+        == 404
+    )
+
+    assert (
+        production_client.get(
+            "/openapi.json",
+        ).status_code
+        == 404
+    )
+
+    health_response = production_client.get(
+        "/api/v1/health",
+    )
+
+    assert health_response.status_code == 200
