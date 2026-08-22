@@ -5,8 +5,8 @@ import {
 } from "react-router-dom";
 
 import {
-  createPaymentOrder,
   completePayment,
+  createPaymentOrder,
 } from "../api/payments";
 
 import { getStoredTokens } from "../auth/tokens";
@@ -17,6 +17,7 @@ import {
 } from "../api/dashboard";
 
 import {
+  getApiErrorMessage,
   getSubscriptionPlans,
   type SubscriptionPlan,
 } from "../api/client";
@@ -24,35 +25,48 @@ import {
 import { useAuth } from "../auth/AuthContext";
 
 
-function formatPrice(plan: SubscriptionPlan): string {
-  const amount = plan.price_minor_units / 100;
+function formatPrice(
+  plan: SubscriptionPlan,
+): string {
+  const amount =
+    plan.price_minor_units / 100;
 
-  return new Intl.NumberFormat("zh-CN", {
-    style: "currency",
-    currency: plan.currency,
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(amount);
+  return new Intl.NumberFormat(
+    "zh-CN",
+    {
+      style: "currency",
+      currency: plan.currency,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    },
+  ).format(amount);
 }
 
 
-function formatDataLimit(bytes: number | null): string {
+function formatDataLimit(
+  bytes: number | null,
+): string {
   if (bytes === null) {
     return "Unlimited data";
   }
 
-  const gibibytes = bytes / 1024 ** 3;
+  const gibibytes =
+    bytes / 1024 ** 3;
 
   return `${gibibytes.toFixed(0)} GB data`;
 }
 
 
-function formatGB(bytes: number | null): string {
+function formatGB(
+  bytes: number | null,
+): string {
   if (bytes === null) {
     return "Unlimited";
   }
 
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  return `${(
+    bytes / 1024 ** 3
+  ).toFixed(2)} GB`;
 }
 
 
@@ -60,20 +74,28 @@ export function DashboardPage() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
-  const [isSigningOut, setIsSigningOut] =
-    useState(false);
+  const [
+    isSigningOut,
+    setIsSigningOut,
+  ] = useState(false);
 
   const [plans, setPlans] =
     useState<SubscriptionPlan[]>([]);
 
-  const [plansError, setPlansError] =
-    useState("");
+  const [
+    plansError,
+    setPlansError,
+  ] = useState("");
 
-  const [arePlansLoading, setArePlansLoading] =
-    useState(true);
+  const [
+    arePlansLoading,
+    setArePlansLoading,
+  ] = useState(true);
 
-  const [currentPaymentId, setCurrentPaymentId] =
-    useState<string | null>(null);
+  const [
+    currentPaymentId,
+    setCurrentPaymentId,
+  ] = useState<string | null>(null);
 
   const [
     currentPaymentPlanId,
@@ -90,11 +112,18 @@ export function DashboardPage() {
     setIsCompletingPayment,
   ] = useState(false);
 
-  const [dashboard, setDashboard] =
-    useState<DashboardData | null>(null);
+  const [
+    dashboard,
+    setDashboard,
+  ] =
+    useState<DashboardData | null>(
+      null,
+    );
 
-  const [dashboardError, setDashboardError] =
-    useState("");
+  const [
+    dashboardError,
+    setDashboardError,
+  ] = useState("");
 
   const [
     isDashboardLoading,
@@ -102,16 +131,19 @@ export function DashboardPage() {
   ] = useState(true);
 
 
-  async function refreshDashboard(): Promise<void> {
-    const tokens = getStoredTokens();
+  async function refreshDashboard():
+    Promise<void> {
+    const tokens =
+      getStoredTokens();
 
     if (!tokens) {
       return;
     }
 
-    const data = await getDashboard(
-      tokens.accessToken,
-    );
+    const data =
+      await getDashboard(
+        tokens.accessToken,
+      );
 
     setDashboard(data);
     setDashboardError("");
@@ -158,11 +190,16 @@ export function DashboardPage() {
   async function handleSubscribe(
     planId: string,
   ): Promise<void> {
-    if (isCreatingPayment) {
+    if (
+      isCreatingPayment ||
+      dashboard?.subscription.status ===
+        "active"
+    ) {
       return;
     }
 
-    const tokens = getStoredTokens();
+    const tokens =
+      getStoredTokens();
 
     if (!tokens) {
       return;
@@ -177,22 +214,33 @@ export function DashboardPage() {
           planId,
         );
 
-      setCurrentPaymentId(payment.id);
-      setCurrentPaymentPlanId(planId);
+      setCurrentPaymentId(
+        payment.id,
+      );
+
+      setCurrentPaymentPlanId(
+        planId,
+      );
 
       try {
         await refreshDashboard();
       } catch {
-        // Payment creation succeeded even if
-        // dashboard refresh temporarily fails.
+        /*
+         * Payment creation succeeded
+         * even if dashboard refresh
+         * temporarily fails.
+         */
       }
 
       alert(
         `Payment created: ${payment.status}`,
       );
-    } catch {
+    } catch (error) {
       alert(
-        "Payment creation failed",
+        getApiErrorMessage(
+          error,
+          "Payment creation failed",
+        ),
       );
     } finally {
       setIsCreatingPayment(false);
@@ -202,7 +250,8 @@ export function DashboardPage() {
 
   async function handleCompletePayment():
     Promise<void> {
-    const tokens = getStoredTokens();
+    const tokens =
+      getStoredTokens();
 
     if (
       !tokens ||
@@ -221,27 +270,20 @@ export function DashboardPage() {
           currentPaymentId,
         );
 
-      /*
-       * Clear the pending payment only AFTER
-       * the backend confirms success.
-       */
       setCurrentPaymentId(null);
       setCurrentPaymentPlanId(null);
 
-      /*
-       * Reload the dashboard so the new
-       * subscription, device limit,
-       * data quota and payment status
-       * appear immediately.
-       */
       await refreshDashboard();
 
       alert(
         `Payment status: ${payment.status}`,
       );
-    } catch {
+    } catch (error) {
       alert(
-        "Payment completion failed",
+        getApiErrorMessage(
+          error,
+          "Payment completion failed",
+        ),
       );
     } finally {
       setIsCompletingPayment(false);
@@ -249,7 +291,8 @@ export function DashboardPage() {
   }
 
 
-  async function handleSignOut() {
+  async function handleSignOut():
+    Promise<void> {
     setIsSigningOut(true);
 
     await signOut();
@@ -261,6 +304,11 @@ export function DashboardPage() {
       },
     );
   }
+
+
+  const hasActiveSubscription =
+    dashboard?.subscription.status ===
+    "active";
 
 
   return (
@@ -285,30 +333,33 @@ export function DashboardPage() {
 
           <nav className="sidebar-nav">
 
-            <a className="nav-item active">
+            <Link
+              className="nav-item active"
+              to="/dashboard"
+            >
               Overview
-            </a>
+            </Link>
 
             <Link
-  className="nav-item"
-  to="/devices"
->
-  Devices
-</Link>
-
-           <Link
-  className="nav-item"
-  to="/subscription"
->
-  Subscription
-</Link>
+              className="nav-item"
+              to="/devices"
+            >
+              Devices
+            </Link>
 
             <Link
-  className="nav-item"
-  to="/usage"
->
-  Usage
-</Link>
+              className="nav-item"
+              to="/subscription"
+            >
+              Subscription
+            </Link>
+
+            <Link
+              className="nav-item"
+              to="/usage"
+            >
+              Usage
+            </Link>
 
           </nav>
 
@@ -327,6 +378,7 @@ export function DashboardPage() {
 
           <button
             className="text-button"
+            type="button"
             onClick={() =>
               void handleSignOut()
             }
@@ -360,7 +412,8 @@ export function DashboardPage() {
 
             <p>
               Manage your subscription,
-              devices and protected connections.
+              devices and protected
+              connections.
             </p>
 
           </div>
@@ -388,8 +441,8 @@ export function DashboardPage() {
                 isDashboardLoading
                   ? "Loading..."
                   : dashboard
-                    ?.subscription
-                    .plan_name
+                      ?.subscription
+                      .plan_name
                     ?? "No Plan"
               }
             </strong>
@@ -400,7 +453,7 @@ export function DashboardPage() {
                 dashboard
                   ?.subscription
                   .status
-                  ?? "Inactive"
+                ?? "Inactive"
               }
             </p>
 
@@ -440,7 +493,7 @@ export function DashboardPage() {
                   dashboard
                     ?.usage
                     .used_bytes
-                    ?? null,
+                  ?? null,
                 )
               }
             </strong>
@@ -452,7 +505,7 @@ export function DashboardPage() {
                   dashboard
                     ?.usage
                     .remaining_bytes
-                    ?? null,
+                  ?? null,
                 )
               }
             </p>
@@ -471,7 +524,7 @@ export function DashboardPage() {
                 dashboard
                   ?.payments
                   .last_payment_status
-                  ?? "No Payment"
+                ?? "No Payment"
               }
             </strong>
 
@@ -513,97 +566,120 @@ export function DashboardPage() {
           }
 
 
+          {
+            hasActiveSubscription && (
+              <p>
+                You already have an active
+                subscription. Use the
+                Subscription page to renew it.
+              </p>
+            )
+          }
+
+
           <div className="plans-grid">
 
             {
-              plans.map((plan) => (
+              plans.map(
+                (plan) => (
 
-                <article
-                  className="plan-card"
-                  key={plan.id}
-                >
+                  <article
+                    className="plan-card"
+                    key={plan.id}
+                  >
 
-                  <h3>
-                    {plan.name}
-                  </h3>
+                    <h3>
+                      {plan.name}
+                    </h3>
 
-                  <div className="plan-price">
-                    {formatPrice(plan)}
-                  </div>
+                    <div className="plan-price">
+                      {formatPrice(plan)}
+                    </div>
 
-                  <p>
-                    {plan.description}
-                  </p>
+                    <p>
+                      {plan.description}
+                    </p>
 
-                  <ul>
+                    <ul>
 
-                    <li>
-                      {plan.duration_days} days
-                    </li>
+                      <li>
+                        {
+                          plan.duration_days
+                        }{" "}
+                        days
+                      </li>
 
-                    <li>
-                      {
-                        formatDataLimit(
-                          plan.data_limit_bytes,
+                      <li>
+                        {
+                          formatDataLimit(
+                            plan.data_limit_bytes,
+                          )
+                        }
+                      </li>
+
+                      <li>
+                        {
+                          plan.max_devices
+                        }{" "}
+                        devices
+                      </li>
+
+                    </ul>
+
+
+                    <button
+                      className="plan-button"
+                      type="button"
+                      disabled={
+                        isCreatingPayment ||
+                        isCompletingPayment ||
+                        hasActiveSubscription
+                      }
+                      onClick={() =>
+                        void handleSubscribe(
+                          plan.id,
                         )
                       }
-                    </li>
+                    >
+                      {
+                        hasActiveSubscription
+                          ? "Subscription Active"
+                          : isCreatingPayment &&
+                              currentPaymentPlanId ===
+                                plan.id
+                            ? "Creating Payment..."
+                            : "Subscribe"
+                      }
+                    </button>
 
-                    <li>
-                      {plan.max_devices} devices
-                    </li>
 
-                  </ul>
-
-
-                  <button
-                    className="plan-button"
-                    type="button"
-                    disabled={
-                      isCreatingPayment ||
-                      isCompletingPayment
-                    }
-                    onClick={() =>
-                      void handleSubscribe(
-                        plan.id,
+                    {
+                      currentPaymentId &&
+                      currentPaymentPlanId ===
+                        plan.id && (
+                        <button
+                          className="plan-button"
+                          type="button"
+                          disabled={
+                            isCompletingPayment
+                          }
+                          onClick={() =>
+                            void handleCompletePayment()
+                          }
+                        >
+                          {
+                            isCompletingPayment
+                              ? "Completing..."
+                              : "Complete Payment"
+                          }
+                        </button>
                       )
                     }
-                  >
-                    {
-                      isCreatingPayment &&
-                      currentPaymentPlanId === plan.id
-                        ? "Creating Payment..."
-                        : "Subscribe"
-                    }
-                  </button>
 
+                  </article>
 
-                  {
-                    currentPaymentId &&
-                    currentPaymentPlanId ===
-                      plan.id && (
-                      <button
-                        className="plan-button"
-                        type="button"
-                        disabled={
-                          isCompletingPayment
-                        }
-                        onClick={() =>
-                          void handleCompletePayment()
-                        }
-                      >
-                        {
-                          isCompletingPayment
-                            ? "Completing..."
-                            : "Complete Payment"
-                        }
-                      </button>
-                    )
-                  }
-
-                </article>
-
-              ))
+                ),
+              )
             }
 
           </div>

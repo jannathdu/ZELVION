@@ -1,8 +1,17 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+  type FormEvent,
+} from "react";
+
 import {
   Link,
   useNavigate,
 } from "react-router-dom";
+
+import {
+  getApiErrorMessage,
+} from "../api/client";
 
 import {
   createDevice,
@@ -31,7 +40,8 @@ async function generateDeviceKeyHash(
     Date.now().toString(),
   ].join("|");
 
-  const encoded = new TextEncoder().encode(source);
+  const encoded =
+    new TextEncoder().encode(source);
 
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -42,7 +52,9 @@ async function generateDeviceKeyHash(
     new Uint8Array(digest),
   )
     .map((byte) =>
-      byte.toString(16).padStart(2, "0"),
+      byte
+        .toString(16)
+        .padStart(2, "0"),
     )
     .join("");
 }
@@ -70,17 +82,24 @@ export function DevicesPage() {
   const [isLoading, setIsLoading] =
     useState(true);
 
-  const [isRegistering, setIsRegistering] =
-    useState(false);
+  const [
+    isRegistering,
+    setIsRegistering,
+  ] = useState(false);
 
-  const [revokingDeviceId, setRevokingDeviceId] =
-    useState<string | null>(null);
+  const [
+    revokingDeviceId,
+    setRevokingDeviceId,
+  ] = useState<string | null>(null);
 
-  const [isSigningOut, setIsSigningOut] =
-    useState(false);
+  const [
+    isSigningOut,
+    setIsSigningOut,
+  ] = useState(false);
 
 
-  async function refreshData(): Promise<void> {
+  async function refreshData():
+    Promise<void> {
     const tokens = getStoredTokens();
 
     if (!tokens) {
@@ -91,8 +110,12 @@ export function DevicesPage() {
       deviceData,
       dashboardData,
     ] = await Promise.all([
-      getDevices(tokens.accessToken),
-      getDashboard(tokens.accessToken),
+      getDevices(
+        tokens.accessToken,
+      ),
+      getDashboard(
+        tokens.accessToken,
+      ),
     ]);
 
     setDevices(deviceData);
@@ -104,6 +127,8 @@ export function DevicesPage() {
     async function loadData() {
       try {
         await refreshData();
+
+        setError("");
       } catch {
         setError(
           "Unable to load device information.",
@@ -118,7 +143,7 @@ export function DevicesPage() {
 
 
   async function handleRegisterDevice(
-    event: React.FormEvent<HTMLFormElement>,
+    event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
     event.preventDefault();
 
@@ -128,6 +153,7 @@ export function DevicesPage() {
       setError(
         "Please enter a device name.",
       );
+
       return;
     }
 
@@ -150,7 +176,8 @@ export function DevicesPage() {
       await createDevice(
         tokens.accessToken,
         {
-          device_key_hash: deviceKeyHash,
+          device_key_hash:
+            deviceKeyHash,
           name: trimmedName,
           platform,
         },
@@ -159,10 +186,12 @@ export function DevicesPage() {
       setName("");
 
       await refreshData();
-
-    } catch {
+    } catch (error) {
       setError(
-        "Device registration failed. Check your subscription or device limit.",
+        getApiErrorMessage(
+          error,
+          "Device registration failed.",
+        ),
       );
     } finally {
       setIsRegistering(false);
@@ -189,10 +218,12 @@ export function DevicesPage() {
       );
 
       await refreshData();
-
-    } catch {
+    } catch (error) {
       setError(
-        "Unable to revoke this device.",
+        getApiErrorMessage(
+          error,
+          "Unable to revoke this device.",
+        ),
       );
     } finally {
       setRevokingDeviceId(null);
@@ -200,7 +231,8 @@ export function DevicesPage() {
   }
 
 
-  async function handleSignOut(): Promise<void> {
+  async function handleSignOut():
+    Promise<void> {
     setIsSigningOut(true);
 
     await signOut();
@@ -216,14 +248,21 @@ export function DevicesPage() {
 
   const activeDevices =
     devices.filter(
-      (device) => device.is_active,
+      (device) =>
+        device.is_active,
     );
 
   const maxDevices =
-    dashboard?.devices.max_devices ?? null;
+    dashboard
+      ?.devices
+      .max_devices
+      ?? null;
 
   const hasActiveSubscription =
-    dashboard?.subscription.status === "active";
+    dashboard
+      ?.subscription
+      .status
+      === "active";
 
   const deviceLimitReached =
     maxDevices !== null &&
@@ -238,6 +277,7 @@ export function DevicesPage() {
         <div>
 
           <div className="brand dashboard-brand">
+
             <span className="brand-mark">
               Z
             </span>
@@ -245,6 +285,7 @@ export function DevicesPage() {
             <span>
               ZELVION
             </span>
+
           </div>
 
 
@@ -265,15 +306,18 @@ export function DevicesPage() {
             </Link>
 
             <Link
-  className="nav-item"
-  to="/subscription"
->
-  Subscription
-</Link>
+              className="nav-item"
+              to="/subscription"
+            >
+              Subscription
+            </Link>
 
-            <a className="nav-item">
+            <Link
+              className="nav-item"
+              to="/usage"
+            >
               Usage
-            </a>
+            </Link>
 
           </nav>
 
@@ -402,19 +446,26 @@ export function DevicesPage() {
 
           {
             !hasActiveSubscription ? (
+
               <p className="error-message">
                 An active subscription is required
                 before registering devices.
               </p>
+
             ) : deviceLimitReached ? (
+
               <p className="error-message">
                 Your device limit has been reached.
                 Revoke a device before adding another.
               </p>
+
             ) : (
+
               <form
                 onSubmit={(event) =>
-                  void handleRegisterDevice(event)
+                  void handleRegisterDevice(
+                    event,
+                  )
                 }
               >
 
@@ -428,7 +479,9 @@ export function DevicesPage() {
                   placeholder="Example: My Laptop"
                   maxLength={100}
                   onChange={(event) =>
-                    setName(event.target.value)
+                    setName(
+                      event.target.value,
+                    )
                   }
                 />
 
@@ -503,84 +556,91 @@ export function DevicesPage() {
 
           {
             isLoading ? (
+
               <p>
                 Loading devices...
               </p>
+
             ) : devices.length === 0 ? (
+
               <p>
                 No devices registered yet.
               </p>
+
             ) : (
+
               <div className="plans-grid">
 
                 {
-                  devices.map((device) => (
+                  devices.map(
+                    (device) => (
 
-                    <article
-                      className="plan-card"
-                      key={device.id}
-                    >
+                      <article
+                        className="plan-card"
+                        key={device.id}
+                      >
 
-                      <h3>
-                        {device.name}
-                      </h3>
+                        <h3>
+                          {device.name}
+                        </h3>
 
-                      <p>
-                        Platform:{" "}
-                        <strong>
-                          {device.platform}
-                        </strong>
-                      </p>
+                        <p>
+                          Platform:{" "}
+                          <strong>
+                            {device.platform}
+                          </strong>
+                        </p>
 
-                      <p>
-                        Status:{" "}
-                        <strong>
-                          {
-                            device.is_active
-                              ? "Active"
-                              : "Revoked"
-                          }
-                        </strong>
-                      </p>
-
-                      <p>
-                        Added:{" "}
-                        {
-                          new Date(
-                            device.created_at,
-                          ).toLocaleString()
-                        }
-                      </p>
-
-
-                      {
-                        device.is_active && (
-                          <button
-                            className="plan-button"
-                            type="button"
-                            disabled={
-                              revokingDeviceId
-                              === device.id
-                            }
-                            onClick={() =>
-                              void handleRevokeDevice(
-                                device.id,
-                              )
-                            }
-                          >
+                        <p>
+                          Status:{" "}
+                          <strong>
                             {
-                              revokingDeviceId
-                              === device.id
-                                ? "Revoking..."
-                                : "Revoke Device"
+                              device.is_active
+                                ? "Active"
+                                : "Revoked"
                             }
-                          </button>
-                        )
-                      }
+                          </strong>
+                        </p>
 
-                    </article>
+                        <p>
+                          Added:{" "}
+                          {
+                            new Date(
+                              device.created_at,
+                            ).toLocaleString()
+                          }
+                        </p>
 
-                  ))
+
+                        {
+                          device.is_active && (
+                            <button
+                              className="plan-button"
+                              type="button"
+                              disabled={
+                                revokingDeviceId
+                                === device.id
+                              }
+                              onClick={() =>
+                                void handleRevokeDevice(
+                                  device.id,
+                                )
+                              }
+                            >
+                              {
+                                revokingDeviceId
+                                === device.id
+                                  ? "Revoking..."
+                                  : "Revoke Device"
+                              }
+                            </button>
+                          )
+                        }
+
+                      </article>
+
+                    ),
+                  )
                 }
 
               </div>

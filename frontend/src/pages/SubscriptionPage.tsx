@@ -5,6 +5,7 @@ import {
 } from "react-router-dom";
 
 import {
+  getApiErrorMessage,
   getSubscriptionPlans,
   type SubscriptionPlan,
 } from "../api/client";
@@ -57,8 +58,12 @@ export function SubscriptionPage() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
-  const [subscription, setSubscription] =
-    useState<UserSubscription | null>(null);
+  const [
+    subscription,
+    setSubscription,
+  ] = useState<UserSubscription | null>(
+    null,
+  );
 
   const [plans, setPlans] =
     useState<SubscriptionPlan[]>([]);
@@ -94,8 +99,13 @@ export function SubscriptionPage() {
       getSubscriptionPlans(),
     ]);
 
-    setSubscription(subscriptionData);
-    setPlans(planData);
+    setSubscription(
+      subscriptionData,
+    );
+
+    setPlans(
+      planData,
+    );
   }
 
 
@@ -103,6 +113,7 @@ export function SubscriptionPage() {
     async function loadSubscription() {
       try {
         await refreshSubscription();
+
         setError("");
       } catch {
         setError(
@@ -121,7 +132,11 @@ export function SubscriptionPage() {
     Promise<void> {
     const tokens = getStoredTokens();
 
-    if (!tokens || !subscription) {
+    if (
+      !tokens ||
+      !subscription ||
+      isRenewing
+    ) {
       return;
     }
 
@@ -141,9 +156,12 @@ export function SubscriptionPage() {
       alert(
         "Subscription renewed successfully.",
       );
-    } catch {
+    } catch (error) {
       setError(
-        "Subscription renewal failed.",
+        getApiErrorMessage(
+          error,
+          "Subscription renewal failed.",
+        ),
       );
     } finally {
       setIsRenewing(false);
@@ -170,7 +188,8 @@ export function SubscriptionPage() {
     subscription
       ? plans.find(
           (plan) =>
-            plan.id === subscription.plan_id,
+            plan.id ===
+            subscription.plan_id,
         ) ?? null
       : null;
 
@@ -294,9 +313,11 @@ export function SubscriptionPage() {
 
         {
           isLoading ? (
+
             <p>
               Loading subscription...
             </p>
+
           ) : subscription === null ? (
 
             <section className="account-section">
@@ -320,6 +341,7 @@ export function SubscriptionPage() {
             </section>
 
           ) : (
+
             <>
 
               <section className="status-grid">
@@ -338,7 +360,8 @@ export function SubscriptionPage() {
                   </strong>
 
                   <p>
-                    Status: {subscription.status}
+                    Status:{" "}
+                    {subscription.status}
                   </p>
 
                 </article>
@@ -355,14 +378,16 @@ export function SubscriptionPage() {
                       formatPrice(
                         subscription
                           .price_minor_units,
-                        subscription.currency,
+                        subscription
+                          .currency,
                       )
                     }
                   </strong>
 
                   <p>
                     {
-                      subscription.duration_days
+                      subscription
+                        .duration_days
                     } days
                   </p>
 
@@ -399,7 +424,8 @@ export function SubscriptionPage() {
 
                   <strong className="card-value">
                     {
-                      subscription.max_devices
+                      subscription
+                        .max_devices
                     }
                   </strong>
 
@@ -424,7 +450,8 @@ export function SubscriptionPage() {
                   </strong>{" "}
                   {
                     formatDate(
-                      subscription.starts_at,
+                      subscription
+                        .starts_at,
                     )
                   }
                 </p>
@@ -435,7 +462,8 @@ export function SubscriptionPage() {
                   </strong>{" "}
                   {
                     formatDate(
-                      subscription.ends_at,
+                      subscription
+                        .ends_at,
                     )
                   }
                 </p>
