@@ -25,6 +25,10 @@ class DuplicateDeviceError(DeviceServiceError):
     """Raised when device already exists."""
 
 
+class DeviceNotFoundError(DeviceServiceError):
+    """Raised when a user's active device cannot be found."""
+
+
 def register_device(
     database: Session,
     *,
@@ -92,6 +96,7 @@ def register_device(
 
     return device
 
+
 def revoke_device(
     database: Session,
     *,
@@ -114,7 +119,7 @@ def revoke_device(
     )
 
     if device is None:
-        raise DeviceServiceError
+        raise DeviceNotFoundError
 
     device.is_active = False
     device.revoked_at = now
@@ -123,6 +128,7 @@ def revoke_device(
     database.refresh(device)
 
     return device
+
 
 def list_user_devices(
     database: Session,
@@ -141,4 +147,6 @@ def list_user_devices(
         )
     )
 
-    return list(database.scalars(statement).all())
+    return list(
+        database.scalars(statement).all()
+    )

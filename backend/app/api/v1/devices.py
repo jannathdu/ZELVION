@@ -1,25 +1,41 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import CurrentUser
 from backend.app.db.session import get_db
-from backend.app.schemas.device import DeviceCreateRequest, DeviceResponse
+from backend.app.schemas.device import (
+    DeviceCreateRequest,
+    DeviceResponse,
+)
 from backend.app.services.device_service import (
     DeviceLimitReachedError,
+    DeviceNotFoundError,
     DuplicateDeviceError,
     NoActiveSubscriptionError,
+    list_user_devices,
     register_device,
+    revoke_device,
 )
+
 
 router = APIRouter(
     prefix="/devices",
     tags=["devices"],
 )
 
-DatabaseSession = Annotated[Session, Depends(get_db)]
+DatabaseSession = Annotated[
+    Session,
+    Depends(get_db),
+]
+
 
 @router.post(
     "",
@@ -58,6 +74,7 @@ def create_device(
             detail="Device already exists",
         ) from None
 
+
 @router.delete(
     "/{device_id}",
     response_model=DeviceResponse,
@@ -67,10 +84,6 @@ def delete_device(
     current_user: CurrentUser,
     database: DatabaseSession,
 ) -> DeviceResponse:
-    from backend.app.services.device_service import (
-        revoke_device,
-    )
-
     try:
         return revoke_device(
             database,
@@ -78,11 +91,12 @@ def delete_device(
             device_id=device_id,
         )
 
-    except Exception:
+    except DeviceNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Device not found",
         ) from None
+
 
 @router.get(
     "",
@@ -92,10 +106,6 @@ def get_my_devices(
     current_user: CurrentUser,
     database: DatabaseSession,
 ) -> list[DeviceResponse]:
-    from backend.app.services.device_service import (
-        list_user_devices,
-    )
-
     return list_user_devices(
         database,
         user_id=current_user.id,
