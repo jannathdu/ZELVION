@@ -35,6 +35,9 @@ class AlipayConfig:
             settings.alipay_notify_url
         )
 
+        self.environment = (
+           settings.environment
+    )
 
 def get_alipay_config() -> AlipayConfig:
     """

@@ -13,6 +13,7 @@ from backend.app.api.dependencies import CurrentUser
 from backend.app.core.config import get_settings
 from backend.app.db.session import get_db
 from backend.app.schemas.payment import (
+    AlipayNotifyRequest,
     AlipayOrderResponse,
     PaymentCreateRequest,
     PaymentHistoryResponse,
@@ -22,6 +23,11 @@ from backend.app.schemas.payment import (
 from backend.app.services.alipay_payment_service import (
     create_alipay_payment_url,
 )
+
+from backend.app.services.alipay_callback_service import (
+    process_alipay_callback,
+)
+
 from backend.app.services.payment_service import (
     ActiveSubscriptionPaymentError,
     InvalidPaymentStatusError,
@@ -226,7 +232,30 @@ def payment_success(
                 "An active subscription already exists"
             ),
         ) from None
+@router.post(
+    "/alipay/notify",
+)
+@router.post(
+    "/alipay/notify",
+)
+def alipay_notify(
+    payload: AlipayNotifyRequest,
+    database: DatabaseSession,
+):
+    try:
+        payment = process_alipay_callback(
+            database,
+            data=payload.model_dump(),
+        )
 
+        return {
+            "success": True,
+            "payment_id": str(payment.id),
+        }
+
+    except Exception as error:
+        database.rollback()
+        raise error
 
 @router.get(
     "/history",

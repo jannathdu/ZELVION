@@ -717,3 +717,211 @@ def test_payment_success_retry_is_idempotent() -> None:
                 )
             )
             database.commit()
+
+def test_alipay_notify_success() -> None:
+    email = (
+        f"alipay-notify-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        assert register_response.status_code == 201
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = str(payment.id)
+
+        response = client.post(
+            "/api/v1/payments/alipay/notify",
+            json={
+                "out_trade_no": payment_id,
+                "trade_no": "ALI-NOTIFY-TEST-001",
+                "trade_status": "TRADE_SUCCESS",
+                "total_amount": "1.00",
+                "sign": "test-sign",
+            },
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert data["success"] is True
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_duplicate_is_idempotent() -> None:
+    email = (
+        f"alipay-duplicate-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    trade_no = "ALI-DUPLICATE-TEST-001"
+
+    try:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        assert register_response.status_code == 201
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = str(payment.id)
+
+        payload = {
+            "out_trade_no": payment_id,
+            "trade_no": trade_no,
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "1.00",
+            "sign": "test-sign",
+        }
+
+        first_response = client.post(
+            "/api/v1/payments/alipay/notify",
+            json=payload,
+        )
+
+        assert first_response.status_code == 200
+        assert first_response.json()["success"] is True
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            assert user is not None
+
+            subscription_count_before = (
+                database.scalar(
+                    select(
+                        func.count(
+                            UserSubscription.id
+                        )
+                    ).where(
+                        UserSubscription.user_id
+                        == user.id
+                    )
+                )
+                or 0
+            )
+
+        second_response = client.post(
+            "/api/v1/payments/alipay/notify",
+            json=payload,
+        )
+
+        assert second_response.status_code == 200
+        assert second_response.json()["success"] is True
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            assert user is not None
+
+            subscription_count_after = (
+                database.scalar(
+                    select(
+                        func.count(
+                            UserSubscription.id
+                        )
+                    ).where(
+                        UserSubscription.user_id
+                        == user.id
+                    )
+                )
+                or 0
+            )
+
+            assert (
+                subscription_count_after
+                == subscription_count_before
+            )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_missing_fields() -> None:
+    response = client.post(
+        "/api/v1/payments/alipay/notify",
+        json={
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "1.00",
+            "sign": "test-sign",
+        },
+    )
+
+    assert response.status_code == 422
