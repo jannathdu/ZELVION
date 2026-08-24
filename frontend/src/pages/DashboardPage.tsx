@@ -6,6 +6,7 @@ import {
 
 import {
   completePayment,
+  createAlipayOrder,
   createPaymentOrder,
 } from "../api/payments";
 
@@ -187,68 +188,89 @@ export function DashboardPage() {
   }, []);
 
 
-  async function handleSubscribe(
-    planId: string,
-  ): Promise<void> {
-    if (
-      isCreatingPayment ||
-      dashboard?.subscription.status ===
-        "active"
-    ) {
-      return;
-    }
+ async function handleSubscribe(
+  planId: string,
+): Promise<void> {
+  if (
+    isCreatingPayment ||
+    dashboard?.subscription.status ===
+      "active"
+  ) {
+    return;
+  }
 
-    const tokens =
-      getStoredTokens();
+  const tokens =
+    getStoredTokens();
 
-    if (!tokens) {
-      return;
-    }
+  if (!tokens) {
+    return;
+  }
 
-    setIsCreatingPayment(true);
+  setIsCreatingPayment(true);
 
-    try {
-      const payment =
-        await createPaymentOrder(
-          tokens.accessToken,
-          planId,
-        );
-
-      setCurrentPaymentId(
-        payment.id,
-      );
-
-      setCurrentPaymentPlanId(
+  try {
+    const payment =
+      await createPaymentOrder(
+        tokens.accessToken,
         planId,
       );
 
-      try {
-        await refreshDashboard();
-      } catch {
-        /*
-         * Payment creation succeeded
-         * even if dashboard refresh
-         * temporarily fails.
-         */
-      }
+    setCurrentPaymentId(
+      payment.id,
+    );
 
-      alert(
-        `Payment created: ${payment.status}`,
+    setCurrentPaymentPlanId(
+      planId,
+    );
+
+    /*
+     * Try to create the real Alipay payment URL.
+     *
+     * Until Alipay finishes provisioning our
+     * sandbox APPID, this may fail. In that case
+     * the existing development Complete Payment
+     * flow remains available.
+     */
+    try {
+      const alipayOrder =
+        await createAlipayOrder(
+          tokens.accessToken,
+          payment.id,
+        );
+
+      window.location.assign(
+        alipayOrder.payment_url,
       );
-    } catch (error) {
+
+      return;
+    } catch {
       alert(
-        getApiErrorMessage(
-          error,
-          "Payment creation failed",
-        ),
+        "Alipay sandbox is currently unavailable. " +
+        "The payment order was created successfully. " +
+        "Use Complete Payment for local development testing.",
       );
-    } finally {
-      setIsCreatingPayment(false);
     }
+
+    try {
+      await refreshDashboard();
+    } catch {
+      /*
+       * Payment creation succeeded even if
+       * dashboard refresh temporarily fails.
+       */
+    }
+  } catch (error) {
+    alert(
+      getApiErrorMessage(
+        error,
+        "Payment creation failed",
+      ),
+    );
+  } finally {
+    setIsCreatingPayment(false);
   }
-
-
-  async function handleCompletePayment():
+}
+async function handleCompletePayment():
     Promise<void> {
     const tokens =
       getStoredTokens();
@@ -289,7 +311,6 @@ export function DashboardPage() {
       setIsCompletingPayment(false);
     }
   }
-
 
   async function handleSignOut():
     Promise<void> {
@@ -648,7 +669,7 @@ export function DashboardPage() {
                               currentPaymentPlanId ===
                                 plan.id
                             ? "Creating Payment..."
-                            : "Subscribe"
+                            : "Pay with Alipay"
                       }
                     </button>
 

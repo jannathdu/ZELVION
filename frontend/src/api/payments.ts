@@ -19,6 +19,12 @@ export type PaymentHistoryResponse = {
 };
 
 
+export type AlipayOrderResponse = {
+  payment_id: string;
+  payment_url: string;
+};
+
+
 export function createPaymentOrder(
   accessToken: string,
   subscriptionPlanId: string,
@@ -32,6 +38,20 @@ export function createPaymentOrder(
         subscription_plan_id: subscriptionPlanId,
         provider: "alipay",
       }),
+    },
+  );
+}
+
+
+export function createAlipayOrder(
+  accessToken: string,
+  paymentId: string,
+): Promise<AlipayOrderResponse> {
+  return requestWithAuth<AlipayOrderResponse>(
+    `/payments/${paymentId}/alipay-order`,
+    accessToken,
+    {
+      method: "POST",
     },
   );
 }

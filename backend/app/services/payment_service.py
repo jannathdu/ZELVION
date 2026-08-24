@@ -199,3 +199,25 @@ def get_payment_history(
     ).all()
 
     return list(payments)
+
+def get_payment_by_id_for_update(
+    database: Session,
+    *,
+    payment_id: uuid.UUID,
+) -> PaymentTransaction:
+    """
+    Return and lock payment by id.
+    """
+
+    payment = database.scalar(
+        select(PaymentTransaction)
+        .where(
+            PaymentTransaction.id == payment_id,
+        )
+        .with_for_update()
+    )
+
+    if payment is None:
+        raise PaymentNotFoundError
+
+    return payment
