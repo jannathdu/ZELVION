@@ -1,3 +1,4 @@
+import base64
 import uuid
 
 from Crypto.Hash import SHA256
@@ -46,9 +47,11 @@ def create_test_alipay_signature(
     items = [
         (key, value)
         for key, value in data.items()
-        if key not in excluded_keys
-        and value is not None
-        and value != ""
+        if (
+            key not in excluded_keys
+            and value is not None
+            and value != ""
+        )
     ]
 
     items.sort(
@@ -70,7 +73,9 @@ def create_test_alipay_signature(
         digest,
     )
 
-    return signature.hex()
+    return base64.b64encode(
+        signature
+    ).decode("ascii")
 
 def test_create_payment_requires_authentication() -> None:
     response = client.post(
@@ -807,6 +812,9 @@ def test_alipay_notify_success() -> None:
                 )
             )
 
+            assert user is not None
+            assert plan is not None
+
             payment = create_payment_order(
                 database,
                 user_id=user.id,
@@ -817,12 +825,12 @@ def test_alipay_notify_success() -> None:
             payment_id = str(payment.id)
 
         payload = {
-            "out_trade_no": payment_id,
-            "trade_no": "ALI-NOTIFY-TEST-001",
-            "trade_status": "TRADE_SUCCESS",
-            "total_amount": "1.00",
-        }
-
+    "app_id": "test-app-id",
+    "out_trade_no": payment_id,
+    "trade_no": "ALI-NOTIFY-TEST-001",
+    "trade_status": "TRADE_SUCCESS",
+    "total_amount": "12.00",
+}
         payload["sign"] = create_test_alipay_signature(
             payload,
             private_key,
@@ -830,11 +838,11 @@ def test_alipay_notify_success() -> None:
 
         response = client.post(
             "/api/v1/payments/alipay/notify",
-            json=payload,
+            data=payload,
         )
 
         assert response.status_code == 200
-        assert response.json()["success"] is True
+        assert response.text == "success"
 
     finally:
         with SessionLocal() as database:
@@ -895,11 +903,12 @@ def test_alipay_notify_duplicate_is_idempotent() -> None:
             payment_id = str(payment.id)
 
         payload = {
-            "out_trade_no": payment_id,
-            "trade_no": "ALI-DUPLICATE-TEST-001",
-            "trade_status": "TRADE_SUCCESS",
-            "total_amount": "1.00",
-        }
+    "app_id": "test-app-id",
+    "out_trade_no": payment_id,
+    "trade_no": "ALI-DUPLICATE-TEST-001",
+    "trade_status": "TRADE_SUCCESS",
+   "total_amount": "12.00",
+}
 
         payload["sign"] = create_test_alipay_signature(
             payload,
@@ -908,19 +917,631 @@ def test_alipay_notify_duplicate_is_idempotent() -> None:
 
         first_response = client.post(
             "/api/v1/payments/alipay/notify",
-            json=payload,
+            data=payload,
         )
 
         second_response = client.post(
             "/api/v1/payments/alipay/notify",
-            json=payload,
+            data=payload,
         )
 
         assert first_response.status_code == 200
-        assert first_response.json()["success"] is True
+        assert first_response.text == "success"
 
         assert second_response.status_code == 200
-        assert second_response.json()["success"] is True
+        assert second_response.text == "success"
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_rejects_wrong_app_id() -> None:
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    private_key, public_key = create_test_alipay_key_pair()
+
+    settings.alipay_app_id = "test-app-id"
+    settings.alipay_public_key = public_key
+
+    email = (
+        f"alipay-wrong-app-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    try:
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = payment.id
+
+        payload = {
+            "app_id": "wrong-app-id",
+            "out_trade_no": str(payment_id),
+            "trade_no": "ALI-WRONG-APP-001",
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "12.00",
+        }
+
+        payload["sign"] = create_test_alipay_signature(
+            payload,
+            private_key,
+        )
+
+        response = client.post(
+            "/api/v1/payments/alipay/notify",
+            data=payload,
+        )
+
+        assert response.status_code == 200
+        assert response.text == "failure"
+
+        with SessionLocal() as database:
+            payment = database.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.id == payment_id,
+                )
+            )
+
+            assert payment is not None
+            assert payment.status == "pending"
+            assert payment.provider_transaction_id is None
+            assert payment.paid_at is None
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_rejects_wrong_amount() -> None:
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    private_key, public_key = create_test_alipay_key_pair()
+
+    settings.alipay_app_id = "test-app-id"
+    settings.alipay_public_key = public_key
+
+    email = (
+        f"alipay-wrong-amount-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    try:
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = payment.id
+
+        payload = {
+            "app_id": "test-app-id",
+            "out_trade_no": str(payment_id),
+            "trade_no": "ALI-WRONG-AMOUNT-001",
+            "trade_status": "TRADE_SUCCESS",
+
+            # Actual monthly amount is 12.00 CNY.
+            # This deliberately sends the wrong amount.
+            "total_amount": "1.00",
+        }
+
+        payload["sign"] = create_test_alipay_signature(
+            payload,
+            private_key,
+        )
+
+        response = client.post(
+            "/api/v1/payments/alipay/notify",
+            data=payload,
+        )
+
+        assert response.status_code == 200
+        assert response.text == "failure"
+
+        with SessionLocal() as database:
+            payment = database.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.id == payment_id,
+                )
+            )
+
+            assert payment is not None
+            assert payment.status == "pending"
+            assert payment.provider_transaction_id is None
+            assert payment.paid_at is None
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_rejects_failed_trade_status() -> None:
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    private_key, public_key = create_test_alipay_key_pair()
+
+    settings.alipay_app_id = "test-app-id"
+    settings.alipay_public_key = public_key
+
+    email = (
+        f"alipay-failed-status-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    try:
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = payment.id
+
+        payload = {
+            "app_id": "test-app-id",
+            "out_trade_no": str(payment_id),
+            "trade_no": "ALI-FAILED-STATUS-001",
+            "trade_status": "WAIT_BUYER_PAY",
+            "total_amount": "12.00",
+        }
+
+        payload["sign"] = create_test_alipay_signature(
+            payload,
+            private_key,
+        )
+
+        response = client.post(
+            "/api/v1/payments/alipay/notify",
+            data=payload,
+        )
+
+        assert response.status_code == 200
+        assert response.text == "failure"
+
+        with SessionLocal() as database:
+            payment = database.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.id == payment_id,
+                )
+            )
+
+            assert payment is not None
+            assert payment.status == "pending"
+            assert payment.provider_transaction_id is None
+            assert payment.paid_at is None
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_rejects_provider_mismatch() -> None:
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    private_key, public_key = create_test_alipay_key_pair()
+
+    settings.alipay_app_id = "test-app-id"
+    settings.alipay_public_key = public_key
+
+    email = (
+        f"alipay-provider-mismatch-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    try:
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="wechat",
+            )
+
+            payment_id = payment.id
+
+        payload = {
+            "app_id": "test-app-id",
+            "out_trade_no": str(payment_id),
+            "trade_no": "ALI-PROVIDER-MISMATCH-001",
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "12.00",
+        }
+
+        payload["sign"] = create_test_alipay_signature(
+            payload,
+            private_key,
+        )
+
+        response = client.post(
+            "/api/v1/payments/alipay/notify",
+            data=payload,
+        )
+
+        assert response.status_code == 200
+        assert response.text == "failure"
+
+        with SessionLocal() as database:
+            payment = database.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.id == payment_id,
+                )
+            )
+
+            assert payment is not None
+            assert payment.status == "pending"
+            assert payment.provider == "wechat"
+            assert payment.provider_transaction_id is None
+            assert payment.paid_at is None
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_rejects_invalid_order_id() -> None:
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    private_key, public_key = create_test_alipay_key_pair()
+
+    settings.alipay_app_id = "test-app-id"
+    settings.alipay_public_key = public_key
+
+    payload = {
+        "app_id": "test-app-id",
+        "out_trade_no": "not-a-valid-uuid",
+        "trade_no": "ALI-BAD-ORDER-ID-001",
+        "trade_status": "TRADE_SUCCESS",
+        "total_amount": "12.00",
+    }
+
+    payload["sign"] = create_test_alipay_signature(
+        payload,
+        private_key,
+    )
+
+    response = client.post(
+        "/api/v1/payments/alipay/notify",
+        data=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.text == "failure"
+
+def test_alipay_notify_rejects_trade_no_mismatch() -> None:
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    private_key, public_key = create_test_alipay_key_pair()
+
+    settings.alipay_app_id = "test-app-id"
+    settings.alipay_public_key = public_key
+
+    email = (
+        f"alipay-trade-no-mismatch-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    try:
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = payment.id
+
+        first_payload = {
+            "app_id": "test-app-id",
+            "out_trade_no": str(payment_id),
+            "trade_no": "ALI-ORIGINAL-TRADE-001",
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "12.00",
+        }
+
+        first_payload["sign"] = (
+            create_test_alipay_signature(
+                first_payload,
+                private_key,
+            )
+        )
+
+        first_response = client.post(
+            "/api/v1/payments/alipay/notify",
+            data=first_payload,
+        )
+
+        assert first_response.status_code == 200
+        assert first_response.text == "success"
+
+        mismatch_payload = {
+            "app_id": "test-app-id",
+            "out_trade_no": str(payment_id),
+            "trade_no": "ALI-DIFFERENT-TRADE-002",
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "12.00",
+        }
+
+        mismatch_payload["sign"] = (
+            create_test_alipay_signature(
+                mismatch_payload,
+                private_key,
+            )
+        )
+
+        mismatch_response = client.post(
+            "/api/v1/payments/alipay/notify",
+            data=mismatch_payload,
+        )
+
+        assert mismatch_response.status_code == 200
+        assert mismatch_response.text == "failure"
+
+        with SessionLocal() as database:
+            payment = database.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.id == payment_id,
+                )
+            )
+
+            assert payment is not None
+            assert payment.status == "success"
+            assert (
+                payment.provider_transaction_id
+                == "ALI-ORIGINAL-TRADE-001"
+            )
+
+    finally:
+        with SessionLocal() as database:
+            database.execute(
+                delete(User).where(
+                    User.email == email,
+                )
+            )
+            database.commit()
+
+def test_alipay_notify_rejects_tampered_signature() -> None:
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    private_key, public_key = create_test_alipay_key_pair()
+
+    settings.alipay_app_id = "test-app-id"
+    settings.alipay_public_key = public_key
+
+    email = (
+        f"alipay-tampered-signature-{uuid.uuid4()}@example.com"
+    )
+    password = "Strong-Test-Password-123!"
+
+    try:
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
+
+        with SessionLocal() as database:
+            user = database.scalar(
+                select(User).where(
+                    User.email == email,
+                )
+            )
+
+            plan = database.scalar(
+                select(SubscriptionPlan).where(
+                    SubscriptionPlan.code == "monthly"
+                )
+            )
+
+            assert user is not None
+            assert plan is not None
+
+            payment = create_payment_order(
+                database,
+                user_id=user.id,
+                subscription_plan_id=plan.id,
+                provider="alipay",
+            )
+
+            payment_id = payment.id
+
+        payload = {
+            "app_id": "test-app-id",
+            "out_trade_no": str(payment_id),
+            "trade_no": "ALI-ORIGINAL-SIGNED-001",
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "12.00",
+        }
+
+        payload["sign"] = create_test_alipay_signature(
+            payload,
+            private_key,
+        )
+
+        # Tamper with signed callback data after
+        # the signature has already been generated.
+        payload["trade_no"] = "ALI-TAMPERED-002"
+
+        response = client.post(
+            "/api/v1/payments/alipay/notify",
+            data=payload,
+        )
+
+        assert response.status_code == 200
+        assert response.text == "failure"
+
+        with SessionLocal() as database:
+            payment = database.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.id == payment_id,
+                )
+            )
+
+            assert payment is not None
+            assert payment.status == "pending"
+            assert payment.provider_transaction_id is None
+            assert payment.paid_at is None
 
     finally:
         with SessionLocal() as database:

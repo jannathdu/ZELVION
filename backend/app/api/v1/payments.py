@@ -1,33 +1,33 @@
 import uuid
 from typing import Annotated
+from urllib.parse import parse_qsl
 
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Request,
     status,
 )
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import CurrentUser
 from backend.app.core.config import get_settings
 from backend.app.db.session import get_db
 from backend.app.schemas.payment import (
-    AlipayNotifyRequest,
     AlipayOrderResponse,
     PaymentCreateRequest,
     PaymentHistoryResponse,
     PaymentResponse,
     PaymentSuccessRequest,
 )
-from backend.app.services.alipay_payment_service import (
-    create_alipay_payment_url,
-)
-
 from backend.app.services.alipay_callback_service import (
     process_alipay_callback,
 )
-
+from backend.app.services.alipay_payment_service import (
+    create_alipay_payment_url,
+)
 from backend.app.services.payment_service import (
     ActiveSubscriptionPaymentError,
     InvalidPaymentStatusError,
@@ -101,7 +101,6 @@ def create_alipay_order(
     current_user: CurrentUser,
     database: DatabaseSession,
 ) -> AlipayOrderResponse:
-
     try:
         payment = get_payment_for_update(
             database,
@@ -145,7 +144,6 @@ def payment_success(
     current_user: CurrentUser,
     database: DatabaseSession,
 ) -> PaymentResponse:
-
     settings = get_settings()
 
     if not settings.enable_mock_subscription_activation:
@@ -162,7 +160,6 @@ def payment_success(
         )
 
         if existing_payment.status == "success":
-
             if (
                 existing_payment.provider_transaction_id
                 == payload.provider_transaction_id
@@ -232,30 +229,51 @@ def payment_success(
                 "An active subscription already exists"
             ),
         ) from None
+
+
 @router.post(
     "/alipay/notify",
+    response_class=PlainTextResponse,
 )
-@router.post(
-    "/alipay/notify",
-)
-def alipay_notify(
-    payload: AlipayNotifyRequest,
+async def alipay_notify(
+    request: Request,
     database: DatabaseSession,
-):
+) -> PlainTextResponse:
+    """
+    Receive Alipay asynchronous payment notification.
+
+    Alipay sends callback parameters as
+    application/x-www-form-urlencoded data.
+    """
+
     try:
-        payment = process_alipay_callback(
-            database,
-            data=payload.model_dump(),
+        raw_body = await request.body()
+
+        form_data = dict(
+            parse_qsl(
+                raw_body.decode("utf-8"),
+                keep_blank_values=True,
+            )
         )
 
-        return {
-            "success": True,
-            "payment_id": str(payment.id),
-        }
+        process_alipay_callback(
+            database,
+            data=form_data,
+        )
 
-    except Exception as error:
+        return PlainTextResponse(
+            content="success",
+            status_code=status.HTTP_200_OK,
+        )
+
+    except Exception:
         database.rollback()
-        raise error
+
+        return PlainTextResponse(
+            content="failure",
+            status_code=status.HTTP_200_OK,
+        )
+
 
 @router.get(
     "/history",
@@ -265,7 +283,6 @@ def payment_history(
     current_user: CurrentUser,
     database: DatabaseSession,
 ) -> PaymentHistoryResponse:
-
     payments = get_payment_history(
         database,
         user_id=current_user.id,

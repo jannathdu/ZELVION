@@ -1,4 +1,4 @@
-from urllib.parse import quote
+import base64
 
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
@@ -19,7 +19,8 @@ def _build_sign_content(
     """
     Build Alipay RSA2 signing content.
 
-    Removes signature fields and sorts parameters.
+    Removes signature fields and sorts parameters
+    alphabetically by parameter name.
     """
 
     excluded_keys = {
@@ -30,9 +31,11 @@ def _build_sign_content(
     items = [
         (key, value)
         for key, value in data.items()
-        if key not in excluded_keys
-        and value is not None
-        and value != ""
+        if (
+            key not in excluded_keys
+            and value is not None
+            and value != ""
+        )
     ]
 
     items.sort(
@@ -49,7 +52,8 @@ def verify_alipay_notification(
     data: dict[str, str],
 ) -> bool:
     """
-    Verify Alipay asynchronous notification signature.
+    Verify an Alipay asynchronous notification
+    using RSA2 (SHA-256 with RSA).
     """
 
     config = get_alipay_config()
@@ -78,22 +82,26 @@ def verify_alipay_notification(
             config.alipay_public_key,
         )
 
-        verifier = pkcs1_15.new(
-            public_key,
+        signature = base64.b64decode(
+            sign,
+            validate=True,
         )
 
         digest = SHA256.new(
             content.encode("utf-8"),
         )
 
-        verifier.verify(
+        pkcs1_15.new(
+            public_key,
+        ).verify(
             digest,
-            bytes.fromhex(
-                sign
-            ),
+            signature,
         )
 
-    except Exception as error:
+    except (
+        ValueError,
+        TypeError,
+    ) as error:
         raise AlipayVerificationError(
             "Invalid Alipay signature."
         ) from error
